@@ -35,7 +35,6 @@
   .dot.stale { background: var(--amber); }
   .dot.down { background: var(--red); }
 
-  #view-display { flex: 1; display: grid; grid-template-columns: 1.1fr 1fr; gap: 1.2vw; min-height: 0; }
   .panel {
     background: var(--panel); border: 1px solid var(--panel-border); border-radius: 12px;
     padding: 1.2vh 1.2vw; display: flex; flex-direction: column; min-height: 0;
@@ -113,14 +112,6 @@
   }
   .hidden { display: none !important; }
 
-  /* View switch (Display = kiosk screens, Lookup = search/scan by location) */
-  .tabs { display: flex; gap: .6vw; }
-  .tab {
-    background: transparent; border: 1px solid var(--panel-border); color: var(--text-secondary);
-    font-size: 1.5vh; font-weight: 700; padding: .4vh 1vw; border-radius: 8px; cursor: pointer;
-  }
-  .tab.active { background: var(--accent); border-color: var(--accent); color: #fff; }
-
   /* Location lookup -- px sizing so it stays readable on phones */
   #view-lookup {
     flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px;
@@ -144,6 +135,8 @@
     border-radius: 999px; padding: 6px 12px; font-size: 14px; font-weight: 700; cursor: pointer;
   }
   .crumb.root { color: var(--text-secondary); }
+  .crumb.sel { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .lk-tabs { margin-bottom: 12px; }
   .lk-card {
     background: var(--panel); border: 1px solid var(--panel-border); border-radius: 12px;
     padding: 12px; margin-bottom: 12px;
@@ -175,8 +168,6 @@
     header h1 { font-size: 18px; }
     header .status { font-size: 12px; gap: 8px; }
     .dot { width: 9px; height: 9px; }
-    .tab { font-size: 14px; padding: 8px 14px; }
-    #view-display { grid-template-columns: 1fr; gap: 10px; }
     .panel { padding: 10px; max-height: 70vh; }
     .panel h2 { font-size: 14px; }
     .txn-row { font-size: 14px; padding: 8px 4px; gap: 8px; }
@@ -207,27 +198,13 @@
 
 <div id="app" class="hidden">
   <header>
-    <h1>LINC Warehouse</h1>
-    <div class="tabs">
-      <button id="tab-display" class="tab active">Display</button>
-      <button id="tab-lookup" class="tab">Lookup</button>
-    </div>
+    <h1>LINC Warehouse &mdash; Location Lookup</h1>
     <div class="status">
       <span id="status-dot" class="dot"></span>
       <span id="status-text">Loading&hellip;</span>
     </div>
   </header>
-  <main id="view-display">
-    <section class="panel">
-      <h2>Transaction Log</h2>
-      <div id="txn-log" class="scroll"><div class="empty">Loading transactions&hellip;</div></div>
-    </section>
-    <section class="panel">
-      <h2>Inventory Summary</h2>
-      <div id="inv-summary" class="scroll"><div class="empty">Loading inventory&hellip;</div></div>
-    </section>
-  </main>
-  <main id="view-lookup" class="hidden">
+  <main id="view-lookup">
     <div class="lk-bar">
       <input id="lk-input" type="search" autocomplete="off" autocapitalize="off" spellcheck="false"
              enterkeyhint="search" placeholder="Scan or type a location (e.g. 22, 2233, 22331111)">
@@ -269,6 +246,7 @@ const CONFIG = {
   // rather than waiting for a request to fail first.
   accessTokenRenewMarginSeconds: 300,
   dataRefreshIntervalMs: 30000,
+  transactionFetchLimit: 1000, // most recent transactions pulled for the per-scope detail view
   transactionLogLimit: 30,
   lowStockThreshold: 5,
   localStorageKey: "linc_display_credential_v1",
@@ -517,90 +495,6 @@ function locationSegmentsHtml(attrs, prefix) {
     .join("");
 }
 
-function renderTransactionLog(rows) {
-  const el = document.getElementById("txn-log");
-  if (!rows.length) {
-    el.innerHTML = "<div class='empty'>No transactions yet.</div>";
-    return;
-  }
-  el.innerHTML = rows
-    .map((t) => {
-      const type = esc(t.transaction_type || "");
-      let locLine = "";
-      if (type === "Receive") {
-        locLine = `<div class="loc-block"><span class="loc-dir">To</span>${locationSegmentsHtml(t, "to_")}</div>`;
-      } else if (type === "Ship") {
-        locLine = `<div class="loc-block"><span class="loc-dir">From</span>${locationSegmentsHtml(t, "from_")}</div>`;
-      } else if (type === "Move") {
-        locLine =
-          `<div class="loc-block"><span class="loc-dir">From</span>${locationSegmentsHtml(t, "from_")}</div>` +
-          `<span class="loc-arrow">&rarr;</span>` +
-          `<div class="loc-block"><span class="loc-dir">To</span>${locationSegmentsHtml(t, "to_")}</div>`;
-      }
-      const sign = type === "Ship" ? "&minus;" : type === "Receive" ? "+" : "&plusmn;";
-      return `
-        <div class="txn-row">
-          <span class="txn-type ${type}">${type}</span>
-          <span class="txn-item">${esc(t.item || t.item_sku || "")}</span>
-          <span class="txn-qty">${sign}${esc(t.quantity)}</span>
-          <div class="loc-line">${locLine}</div>
-          <span class="txn-meta">${esc(t.performed_by || "")} &middot; ${formatEpochMs(t.transaction_datetime)}</span>
-        </div>`;
-    })
-    .join("");
-}
-
-function renderInventorySummary(rows) {
-  const el = document.getElementById("inv-summary");
-  if (!rows.length) {
-    el.innerHTML = "<div class='empty'>No inventory recorded yet.</div>";
-    return;
-  }
-
-  // One row per item+location (not rolled up) so Zone/Row/Bay/Level/Position
-  // can be shown as their own labeled columns. NOTE: the Inventory Balance
-  // layer stores "Row" under the field name "aisle" -- same field-naming
-  // quirk documented in reconcile_inventory.py's SEGMENT_FIELD_MAP; the
-  // column header still says "Row" for consistency with the Transaction Log.
-  const sorted = [...rows].sort((a, b) => {
-    const an = a.item || a.item_sku || "";
-    const bn = b.item || b.item_sku || "";
-    if (an !== bn) return an.localeCompare(bn);
-    const az = String(a.zone ?? ""), bz = String(b.zone ?? "");
-    if (az !== bz) return az.localeCompare(bz);
-    const ar = String(a.aisle ?? ""), br = String(b.aisle ?? "");
-    if (ar !== br) return ar.localeCompare(br);
-    const ab = String(a.bay ?? ""), bb = String(b.bay ?? "");
-    if (ab !== bb) return ab.localeCompare(bb);
-    return String(a.level ?? "").localeCompare(String(b.level ?? ""));
-  });
-
-  const bodyRows = sorted
-    .map((r) => {
-      const qty = r.quantity_on_hand || 0;
-      const qtyClass = qty === 0 ? "qty-zero" : qty <= CONFIG.lowStockThreshold ? "qty-low" : "";
-      return `<tr>
-        <td>${esc(r.item || r.item_sku || "")}</td>
-        <td>${esc(r.zone ?? "")}</td>
-        <td>${esc(r.aisle ?? "")}</td>
-        <td>${esc(r.bay ?? "")}</td>
-        <td>${esc(r.level ?? "")}</td>
-        <td>${esc(r.position ?? "")}</td>
-        <td class="num ${qtyClass}">${qty}</td>
-      </tr>`;
-    })
-    .join("");
-
-  el.innerHTML = `
-    <table>
-      <thead><tr>
-        <th>Item</th><th>Zone</th><th>Row</th><th>Bay</th><th>Level</th><th>Position</th>
-        <th class="num">Qty On Hand</th>
-      </tr></thead>
-      <tbody>${bodyRows}</tbody>
-    </table>`;
-}
-
 // ===========================================================================
 // Location lookup: search or scan a location code and get a summary rolled
 // up by the next segment down (scan a zone -> totals per row; a row -> per
@@ -613,8 +507,7 @@ function renderInventorySummary(rows) {
 // (which can be blank on older rows). A short code like "22" therefore matches
 // both zone 22 and row 22 (when there's no zone) -- the data decides.
 // ===========================================================================
-const Lookup = { balances: [], query: "", site: "", loaded: false };
-let currentView = "display";
+const Lookup = { balances: [], txns: [], query: "", site: "", tab: "stock", loaded: false };
 
 function escAttr(s) {
   return esc(s).replace(/"/g, "&quot;");
@@ -741,6 +634,82 @@ function summarizeLookup(rows, rawQuery) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Transactions touching a scope. A transaction is "in scope" if its from-code
+// (Move/Ship) or to-code (Move/Receive) starts with the query -- so at any
+// level (whole warehouse, a zone, a row ... a single position) you get the
+// full detail of what moved in or out of it.
+// ---------------------------------------------------------------------------
+function txnCode(t, prefix) {
+  const parts = [];
+  const zone = String(t[`${prefix}zone`] ?? "").trim();
+  if (zone) parts.push(pad2(zone));
+  for (const f of ["row", "bay", "level", "position"]) {
+    const v = String(t[`${prefix}${f}`] ?? "").trim();
+    if (v) parts.push(pad2(v));
+  }
+  return parts.join("");
+}
+
+function scopedTransactions(txns, rawQuery) {
+  const q = normalizeQuery(rawQuery);
+  const out = [];
+  for (const t of txns) {
+    const type = t.transaction_type;
+    const fromCode = type === "Receive" ? "" : txnCode(t, "from_");
+    const toCode = type === "Ship" ? "" : txnCode(t, "to_");
+    const fromIn = fromCode !== "" && fromCode.toLowerCase().startsWith(q);
+    const toIn = toCode !== "" && toCode.toLowerCase().startsWith(q);
+    if (!fromIn && !toIn) continue;
+    // Effect on the scope itself: stock arriving, leaving, or just shuffled inside it.
+    const effect = fromIn && toIn ? "within" : toIn ? "in" : "out";
+    out.push({ t, fromCode, toCode, effect });
+  }
+  return out;
+}
+
+function renderTxnView(crumbs) {
+  const rows = (Lookup.site ? Lookup.txns.filter((t) => (t.site || "") === Lookup.site) : Lookup.txns);
+  const scoped = scopedTransactions(rows, Lookup.query);
+  let qtyIn = 0, qtyOut = 0, within = 0;
+  for (const x of scoped) {
+    const n = Number(x.t.quantity) || 0;
+    if (x.effect === "in") qtyIn += n; else if (x.effect === "out") qtyOut += n; else within += n;
+  }
+  const SHOW = 200;
+  const list = scoped.slice(0, SHOW).map((x) => {
+    const t = x.t;
+    const type = esc(t.transaction_type || "");
+    const sign = x.effect === "in" ? "+" : x.effect === "out" ? "&minus;" : "&harr;";
+    const block = (dir, prefix, code) =>
+      `<div class="loc-block" data-q="${escAttr(code)}" style="cursor:pointer"><span class="loc-dir">${dir}</span>${locationSegmentsHtml(t, prefix)}</div>`;
+    let loc = "";
+    if (type === "Receive") loc = block("To", "to_", x.toCode);
+    else if (type === "Ship") loc = block("From", "from_", x.fromCode);
+    else loc = block("From", "from_", x.fromCode) + `<span class="loc-arrow">&rarr;</span>` + block("To", "to_", x.toCode);
+    const meta = [esc(t.performed_by || ""), formatEpochMs(t.transaction_datetime), t.lot ? `Lot ${esc(t.lot)}` : ""]
+      .filter(Boolean).join(" &middot; ");
+    return `<div class="txn-row">
+      <span class="txn-type ${type}">${type}</span>
+      <span class="txn-item">${esc(t.item || t.item_sku || "")}</span>
+      <span class="txn-qty">${sign}${esc(t.quantity)}</span>
+      <div class="loc-line">${loc}</div>
+      <span class="txn-meta">${meta}</span>
+    </div>`;
+  }).join("");
+
+  if (!scoped.length) {
+    return crumbs + `<div class="empty">No transactions touch this location${Lookup.txns.length >= CONFIG.transactionFetchLimit ? " in the most recent " + CONFIG.transactionFetchLimit : ""}.</div>`;
+  }
+  return crumbs + `<div class="lk-card"><div class="lk-stats">
+      <div class="lk-stat"><div class="n">${scoped.length}</div><div class="l">Transactions</div></div>
+      <div class="lk-stat"><div class="n">+${qtyIn}</div><div class="l">Qty in</div></div>
+      <div class="lk-stat"><div class="n">&minus;${qtyOut}</div><div class="l">Qty out</div></div>
+      <div class="lk-stat"><div class="n">${within}</div><div class="l">Moved within</div></div>
+    </div></div>
+    <div class="lk-card"><h3>Newest first${scoped.length > SHOW ? ` (showing ${SHOW} of ${scoped.length})` : ""}</h3>${list}</div>`;
+}
+
 function renderLookupResult(res) {
   const el = document.getElementById("lk-results");
   if (!Lookup.loaded) {
@@ -751,7 +720,16 @@ function renderLookupResult(res) {
   const crumbs =
     `<div class="crumbs"><button class="crumb root" data-q="">Warehouse</button>` +
     res.crumbs.map((c) => `<button class="crumb" data-q="${escAttr(c.prefix)}">${esc(c.label)} ${esc(c.value)}</button>`).join("") +
-    `</div>`;
+    `</div>` +
+    `<div class="crumbs lk-tabs">
+      <button class="crumb ${Lookup.tab === "stock" ? "sel" : ""}" data-tab="stock">Stock</button>
+      <button class="crumb ${Lookup.tab === "txns" ? "sel" : ""}" data-tab="txns">Transactions (${scopedTransactions(Lookup.txns, Lookup.query).length})</button>
+    </div>`;
+
+  if (Lookup.tab === "txns") {
+    el.innerHTML = renderTxnView(crumbs);
+    return;
+  }
 
   if (res.matchedCount === 0) {
     if (res.q === "") {
@@ -845,27 +823,30 @@ function renderLookupFromState() {
   renderLookupResult(summarizeLookup(filteredBalances(), Lookup.query));
 }
 
+async function loadData() {
+  const [balUrl, txnUrl] = await Promise.all([
+    resolveLayerUrl(CONFIG.balanceItemId),
+    resolveLayerUrl(CONFIG.transactionsItemId),
+  ]);
+  const [balances, txns] = await Promise.all([
+    queryLayer(balUrl),
+    queryLayer(txnUrl, { orderByFields: "transaction_datetime DESC", resultRecordCount: CONFIG.transactionFetchLimit }),
+  ]);
+  Lookup.balances = balances;
+  Lookup.txns = txns;
+  Lookup.loaded = true;
+}
+
 async function runLookup(query) {
   Lookup.query = String(query ?? "");
   document.getElementById("lk-input").value = Lookup.query;
   try {
-    const balUrl = await resolveLayerUrl(CONFIG.balanceItemId);
-    Lookup.balances = await queryLayer(balUrl);
-    Lookup.loaded = true;
+    await loadData();
   } catch (e) {
     console.warn("DIAG: lookup refresh failed, using last loaded data", e);
-    setStatus("stale", `Lookup using cached data (${new Date().toLocaleTimeString()})`);
+    setStatus("stale", `Using cached data (${new Date().toLocaleTimeString()})`);
   }
   renderLookupFromState();
-}
-
-function setView(view) {
-  currentView = view;
-  document.getElementById("view-display").classList[view === "display" ? "remove" : "add"]("hidden");
-  document.getElementById("view-lookup").classList[view === "lookup" ? "remove" : "add"]("hidden");
-  document.getElementById("tab-display").className = view === "display" ? "tab active" : "tab";
-  document.getElementById("tab-lookup").className = view === "lookup" ? "tab active" : "tab";
-  if (view === "lookup") renderLookupFromState();
 }
 
 // ---------------------------------------------------------------------------
@@ -941,15 +922,16 @@ const Scanner = {
 
 function wireLookupUi() {
   const $ = (id) => document.getElementById(id);
-  $("tab-display").addEventListener("click", () => setView("display"));
-  $("tab-lookup").addEventListener("click", () => setView("lookup"));
   $("lk-search").addEventListener("click", () => runLookup($("lk-input").value));
   $("lk-input").addEventListener("keydown", (e) => { if (e.key === "Enter") runLookup($("lk-input").value); });
   $("lk-scan").addEventListener("click", () => Scanner.start((text) => runLookup(text)));
   $("scan-cancel").addEventListener("click", () => Scanner.stop());
   $("lk-site").addEventListener("change", (e) => { Lookup.site = e.target.value; renderLookupFromState(); });
   $("lk-results").addEventListener("click", (e) => {
-    const t = e.target && e.target.closest ? e.target.closest("[data-q]") : null;
+    const closest = (sel) => (e.target && e.target.closest ? e.target.closest(sel) : null);
+    const tab = closest("[data-tab]");
+    if (tab) { Lookup.tab = tab.getAttribute("data-tab"); renderLookupFromState(); return; }
+    const t = closest("[data-q]");
     if (t) runLookup(t.getAttribute("data-q"));
   });
 }
@@ -979,22 +961,8 @@ function showApp() {
 // ===========================================================================
 async function refreshData() {
   try {
-    const [txnUrl, balUrl] = await Promise.all([
-      resolveLayerUrl(CONFIG.transactionsItemId),
-      resolveLayerUrl(CONFIG.balanceItemId),
-    ]);
-    const [txns, balances] = await Promise.all([
-      queryLayer(txnUrl, {
-        orderByFields: "transaction_datetime DESC",
-        resultRecordCount: CONFIG.transactionLogLimit,
-      }),
-      queryLayer(balUrl),
-    ]);
-    renderTransactionLog(txns);
-    renderInventorySummary(balances);
-    Lookup.balances = balances;
-    Lookup.loaded = true;
-    if (currentView === "lookup") renderLookupFromState();
+    await loadData();
+    renderLookupFromState();
     setStatus("ok", `Updated ${new Date().toLocaleTimeString()}`);
   } catch (e) {
     console.warn("DIAG: refreshData failed", e);
@@ -1031,9 +999,6 @@ async function init() {
 
   Auth.scheduleProactiveRenewal();
   showApp();
-  // Phones land on Lookup; wall displays stay on the kiosk view.
-  const isMobile = typeof window.matchMedia === "function" && window.matchMedia("(max-width: 900px)").matches;
-  setView(isMobile ? "lookup" : "display");
   refreshData();
   setInterval(refreshData, CONFIG.dataRefreshIntervalMs);
 }
