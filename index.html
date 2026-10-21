@@ -65,6 +65,10 @@
     font-weight: 800; font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap;
     font-size: max(28px, 3.4vh); line-height: 1;
   }
+  .unit.gal { color: #9cc2ff; }
+  .txn-qtywrap { text-align: right; }
+  .unit { display: block; font-size: 12px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em; margin-top: 2px; }
+  .txn-qtywrap .unit { font-size: max(13px, 1.4vh); }
   .txn-qty.in { color: #6ee7a0; }
   .txn-qty.out { color: #ff9a9a; }
   .txn-qty.within { color: #9cc2ff; }
@@ -263,6 +267,10 @@ const CONFIG = {
   // rather than waiting for a request to fail first.
   accessTokenRenewMarginSeconds: 300,
   dataRefreshIntervalMs: 30000,
+  // Barcode Library item ID -- used to look up each water SKU's per-unit volume
+  // (its `volume` + `Volume_type` fields, matched on barcode = item_sku) so water
+  // quantities can show an approximate gallons line. Leave "" to turn that off.
+  barcodeLibraryItemId: "",
   transactionFetchLimit: 1000, // most recent transactions pulled for the per-scope detail view
   transactionLogLimit: 30,
   lowStockThreshold: 5,
@@ -524,7 +532,59 @@ function locationSegmentsHtml(attrs, prefix) {
 // (which can be blank on older rows). A short code like "22" therefore matches
 // both zone 22 and row 22 (when there's no zone) -- the data decides.
 // ===========================================================================
-const Lookup = { balances: [], txns: [], query: "", site: "", tab: "stock", loaded: false };
+const Lookup = { balances: [], txns: [], volumes: {}, query: "", site: "", tab: "stock", loaded: false };
+
+// ---- Water: approximate gallons ------------------------------------------
+// gallons-per-unit comes from the Barcode Library (per-item `volume` in
+// `Volume_type`), assuming quantity counts those barcoded items.
+function ciGet(row, name) {
+  for (const k of Object.keys(row)) if (k.toLowerCase() === name) return row[k];
+  return undefined;
+}
+
+function gallonsPerUnit(volume, type) {
+  const v = Number(volume);
+  if (!(v > 0)) return 0;
+  const t = String(type ?? "").toLowerCase();
+  let f = 0;
+  if (/gal/.test(t)) f = 1;
+  else if (/\bml\b|milli/.test(t)) f = 0.000264172;
+  else if (/\bl\b|lit(er|re)/.test(t)) f = 0.264172;
+  else if (/quart|\bqt/.test(t)) f = 0.25;
+  else if (/pint|\bpt/.test(t)) f = 0.125;
+  else if (/oz|ounce/.test(t)) f = 1 / 128;
+  return v * f;
+}
+
+function isWater(name) {
+  return /\bwater\b/i.test(String(name ?? ""));
+}
+
+function gallonsFor(sku, name, qty) {
+  if (!isWater(name)) return 0;
+  const per = Lookup.volumes[String(sku ?? "")];
+  return per > 0 ? per * (Number(qty) || 0) : 0;
+}
+
+function fmtGallons(g) {
+  return g >= 100 ? Math.round(g).toLocaleString("en-US") : (Math.round(g * 10) / 10).toLocaleString("en-US");
+}
+
+function gallonsHtml(sku, name, qty) {
+  const g = gallonsFor(sku, name, qty);
+  return g > 0 ? `<span class="unit gal">&asymp; ${fmtGallons(g)} gal</span>` : "";
+}
+
+function unitHtml(u) {
+  const t = String(u ?? "").trim();
+  return t ? `<span class="unit">${esc(t)}</span>` : "";
+}
+
+function fmtNum(v) {
+  if (v === undefined || v === null || v === "") return "";
+  const n = Number(v);
+  return Number.isFinite(n) ? n.toLocaleString("en-US") : String(v);
+}
 
 function escAttr(s) {
   return esc(s).replace(/"/g, "&quot;");
@@ -585,7 +645,8 @@ function summarizeLookup(rows, rawQuery) {
     const sku = r.item_sku || "(unknown)";
     locations.add(code);
     totalQty += qty;
-    const it = items[sku] || (items[sku] = { sku, name: r.item || sku, qty: 0, locs: new Set() });
+    const it = items[sku] || (items[sku] = { sku, name: r.item || sku, qty: 0, locs: new Set(), unit: "" });
+    if (!it.unit) it.unit = String(r.unit_of_measure ?? "").trim();
     it.qty += qty;
     it.locs.add(code);
 
@@ -635,7 +696,7 @@ function summarizeLookup(rows, rawQuery) {
       if (!text || !hay.includes(text)) continue;
       const segs = rowSegments(r);
       const sku = r.item_sku || "(unknown)";
-      const m = bySku[sku] || (bySku[sku] = { sku, name: r.item || sku, qty: 0, locs: [] });
+      const m = bySku[sku] || (bySku[sku] = { sku, name: r.item || sku, qty: 0, locs: [], unit: String(r.unit_of_measure ?? "").trim() });
       const qty = Number(r.quantity_on_hand) || 0;
       m.qty += qty;
       m.locs.push({ code: segs.map((s) => s.value).join(""), label: segs.map((s) => s.value).join("-"), qty });
@@ -709,7 +770,7 @@ function renderTxnView(crumbs) {
     return `<div class="txn-row">
       <span class="txn-type ${type}">${type}</span>
       <span class="txn-item">${esc(t.item || t.item_sku || "")}</span>
-      <span class="txn-qty ${x.effect}">${sign}${esc(t.quantity)}</span>
+      <div class="txn-qtywrap"><span class="txn-qty ${x.effect}">${sign}${fmtNum(t.quantity)}</span>${unitHtml(t.unit_of_measure)}${gallonsHtml(t.item_sku, t.item, t.quantity)}</div>
       <div class="loc-line">${loc}</div>
       <span class="txn-meta">${meta}</span>
     </div>`;
@@ -719,10 +780,10 @@ function renderTxnView(crumbs) {
     return crumbs + `<div class="empty">No transactions touch this location${Lookup.txns.length >= CONFIG.transactionFetchLimit ? " in the most recent " + CONFIG.transactionFetchLimit : ""}.</div>`;
   }
   return crumbs + `<div class="lk-card"><div class="lk-stats">
-      <div class="lk-stat"><div class="n">${scoped.length}</div><div class="l">Transactions</div></div>
-      <div class="lk-stat"><div class="n">+${qtyIn}</div><div class="l">Qty in</div></div>
-      <div class="lk-stat"><div class="n">&minus;${qtyOut}</div><div class="l">Qty out</div></div>
-      <div class="lk-stat"><div class="n">${within}</div><div class="l">Moved within</div></div>
+      <div class="lk-stat"><div class="n">${fmtNum(scoped.length)}</div><div class="l">Transactions</div></div>
+      <div class="lk-stat"><div class="n">+${fmtNum(qtyIn)}</div><div class="l">Qty in</div></div>
+      <div class="lk-stat"><div class="n">&minus;${fmtNum(qtyOut)}</div><div class="l">Qty out</div></div>
+      <div class="lk-stat"><div class="n">${fmtNum(within)}</div><div class="l">Moved within</div></div>
     </div></div>
     <div class="lk-card"><h3>Newest first${scoped.length > SHOW ? ` (showing ${SHOW} of ${scoped.length})` : ""}</h3>${list}</div>`;
 }
@@ -755,7 +816,7 @@ function renderLookupResult(res) {
       const rows = res.itemMatches
         .map((m) => `<tr>
           <td>${esc(m.name)}</td>
-          <td class="num">${m.qty}</td>
+          <td class="num">${fmtNum(m.qty)}${unitHtml(m.unit)}${gallonsHtml(m.sku, m.name, m.qty)}</td>
           <td>${m.locs.map((l) => `<button class="crumb" data-q="${escAttr(l.code)}">${esc(l.label)}</button>`).join(" ")}</td>
         </tr>`)
         .join("");
@@ -769,9 +830,12 @@ function renderLookupResult(res) {
 
   let html = crumbs;
   html += `<div class="lk-card"><div class="lk-stats">
-    <div class="lk-stat"><div class="n">${res.locationCount}</div><div class="l">Locations</div></div>
+    <div class="lk-stat"><div class="n">${fmtNum(res.locationCount)}</div><div class="l">Locations</div></div>
     <div class="lk-stat"><div class="n">${res.itemCount}</div><div class="l">Item types</div></div>
-    <div class="lk-stat"><div class="n">${res.totalQty}</div><div class="l">Total on hand</div></div>
+    <div class="lk-stat"><div class="n">${fmtNum(res.totalQty)}</div><div class="l">Total on hand</div></div>${
+      (() => { const g = res.items.reduce((n, it) => n + gallonsFor(it.sku, it.name, it.qty), 0);
+        return g > 0 ? `<div class="lk-stat"><div class="n">&asymp; ${fmtGallons(g)}</div><div class="l">Gallons of water</div></div>` : ""; })()
+    }
   </div></div>`;
 
   for (const label of Object.keys(res.groups)) {
@@ -779,7 +843,7 @@ function renderLookupResult(res) {
     const rows = entries
       .map((e) => `<tr class="drill" data-q="${escAttr(e.drill)}" role="button" tabindex="0">
         <td><span class="drill-btn"><span>${esc(label)} ${esc(e.value)}</span><span class="chev">&rsaquo;</span></span></td>
-        <td class="num">${e.locs.size}</td><td class="num">${e.skus.size}</td><td class="num">${e.qty}</td>
+        <td class="num">${fmtNum(e.locs.size)}</td><td class="num">${fmtNum(e.skus.size)}</td><td class="num">${fmtNum(e.qty)}</td>
       </tr>`)
       .join("");
     html += `<div class="lk-card"><h3>By ${esc(label)}</h3>
@@ -795,8 +859,8 @@ function renderLookupResult(res) {
         return `<tr>
           <td>${esc(r.item || r.item_sku || "")}</td>
           <td>${esc(r.lot_number ?? "")}</td>
-          <td class="num ${qtyClass}">${qty}</td>
-          <td class="num">${esc(r.quantity_available ?? "")}</td>
+          <td class="num ${qtyClass}">${fmtNum(qty)}${unitHtml(r.unit_of_measure)}${gallonsHtml(r.item_sku, r.item, qty)}</td>
+          <td class="num">${fmtNum(r.quantity_available)}${unitHtml(r.unit_of_measure)}${gallonsHtml(r.item_sku, r.item, r.quantity_available)}</td>
         </tr>`;
       })
       .join("");
@@ -808,7 +872,7 @@ function renderLookupResult(res) {
   const singleLeafOnly = res.leaves.length === 1 && Object.keys(res.groups).length === 0;
   if (!singleLeafOnly) {
     const rows = res.items
-      .map((it) => `<tr><td>${esc(it.name)}</td><td class="num">${it.locs.size}</td><td class="num">${it.qty}</td></tr>`)
+      .map((it) => `<tr><td>${esc(it.name)}</td><td class="num">${fmtNum(it.locs.size)}</td><td class="num">${fmtNum(it.qty)}${unitHtml(it.unit)}${gallonsHtml(it.sku, it.name, it.qty)}</td></tr>`)
       .join("");
     html += `<div class="lk-card"><h3>Items in this scope</h3>
       <table><thead><tr><th>Item</th><th class="num">Locations</th><th class="num">Qty</th></tr></thead>
@@ -852,6 +916,27 @@ async function loadData() {
   Lookup.balances = balances;
   Lookup.txns = txns;
   Lookup.loaded = true;
+  await loadVolumes(); // best-effort; never blocks the lookup itself
+}
+
+let volumesLoadedAt = 0;
+async function loadVolumes() {
+  if (!CONFIG.barcodeLibraryItemId) return;
+  if (Date.now() - volumesLoadedAt < 10 * 60 * 1000) return; // library rarely changes
+  try {
+    const url = await resolveLayerUrl(CONFIG.barcodeLibraryItemId);
+    const rows = await queryLayer(url);
+    const map = {};
+    for (const row of rows) {
+      const barcode = ciGet(row, "barcode");
+      const per = gallonsPerUnit(ciGet(row, "volume"), ciGet(row, "volume_type"));
+      if (barcode && per > 0) map[String(barcode)] = per;
+    }
+    Lookup.volumes = map;
+    volumesLoadedAt = Date.now();
+  } catch (e) {
+    console.warn("DIAG: could not load Barcode Library volumes", e);
+  }
 }
 
 async function runLookup(query) {
