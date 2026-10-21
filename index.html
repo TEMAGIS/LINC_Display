@@ -61,7 +61,13 @@
   .txn-type.Ship { background: rgba(239,68,68,.18); color: #ff9a9a; }
   .txn-type.Move { background: rgba(59,130,246,.18); color: #9cc2ff; }
   .txn-item { color: var(--text-primary); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .txn-qty { font-weight: 800; font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+  .txn-qty {
+    font-weight: 800; font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap;
+    font-size: max(28px, 3.4vh); line-height: 1;
+  }
+  .txn-qty.in { color: #6ee7a0; }
+  .txn-qty.out { color: #ff9a9a; }
+  .txn-qty.within { color: #9cc2ff; }
   .txn-meta { grid-column: 1 / -1; color: var(--text-muted); font-size: max(12px, 1.2vh); margin-top: .1vh; }
 
   /* Per-transaction location breakdown, shown as labeled Zone/Row/Bay/Level/
@@ -703,7 +709,7 @@ function renderTxnView(crumbs) {
     return `<div class="txn-row">
       <span class="txn-type ${type}">${type}</span>
       <span class="txn-item">${esc(t.item || t.item_sku || "")}</span>
-      <span class="txn-qty">${sign}${esc(t.quantity)}</span>
+      <span class="txn-qty ${x.effect}">${sign}${esc(t.quantity)}</span>
       <div class="loc-line">${loc}</div>
       <span class="txn-meta">${meta}</span>
     </div>`;
