@@ -1,1 +1,583 @@
 
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LINC Warehouse Display</title>
+<style>
+  :root {
+    --bg: #0b1220;
+    --panel: #101a2e;
+    --panel-border: #1e2c47;
+    --text-primary: #eef2ff;
+    --text-secondary: #8b9bc2;
+    --text-muted: #4b5878;
+    --accent: #3b82f6;
+    --green: #22c55e;
+    --red: #ef4444;
+    --amber: #f59e0b;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    height: 100%; background: var(--bg); color: var(--text-primary);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    overflow: hidden;
+  }
+  #app { height: 100vh; display: flex; flex-direction: column; padding: 1.5vh 1.5vw; gap: 1.2vh; }
+
+  header {
+    display: flex; align-items: baseline; justify-content: space-between;
+    padding-bottom: .6vh; border-bottom: 2px solid var(--panel-border);
+  }
+  header h1 { font-size: 2.6vh; font-weight: 800; letter-spacing: .02em; }
+  header .status { font-size: 1.5vh; color: var(--text-secondary); display: flex; align-items: center; gap: .8vw; }
+  .dot { width: .9vh; height: .9vh; border-radius: 50%; background: var(--green); display: inline-block; }
+  .dot.stale { background: var(--amber); }
+  .dot.down { background: var(--red); }
+
+  main { flex: 1; display: grid; grid-template-columns: 1.1fr 1fr; gap: 1.2vw; min-height: 0; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--panel-border); border-radius: 12px;
+    padding: 1.2vh 1.2vw; display: flex; flex-direction: column; min-height: 0;
+  }
+  .panel h2 {
+    font-size: 1.9vh; font-weight: 700; color: var(--text-secondary);
+    text-transform: uppercase; letter-spacing: .08em; padding-bottom: .8vh;
+    border-bottom: 1px solid var(--panel-border); margin-bottom: .6vh; flex-shrink: 0;
+  }
+  .scroll { overflow-y: auto; flex: 1; min-height: 0; }
+  .scroll::-webkit-scrollbar { width: 8px; }
+  .scroll::-webkit-scrollbar-thumb { background: var(--panel-border); border-radius: 4px; }
+
+  /* Transaction log */
+  .txn-row {
+    display: grid; grid-template-columns: auto 1fr auto; align-items: center;
+    gap: .8vw; padding: .9vh .4vw; border-bottom: 1px solid var(--panel-border); font-size: 1.7vh;
+  }
+  .txn-type {
+    font-size: 1.2vh; font-weight: 800; text-transform: uppercase; letter-spacing: .05em;
+    padding: .3vh .7vw; border-radius: 999px; white-space: nowrap;
+  }
+  .txn-type.Receive { background: rgba(34,197,94,.15); color: var(--green); }
+  .txn-type.Ship { background: rgba(239,68,68,.15); color: var(--red); }
+  .txn-type.Move { background: rgba(59,130,246,.15); color: var(--accent); }
+  .txn-item { color: var(--text-primary); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .txn-qty { font-weight: 800; font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+  .txn-meta { grid-column: 1 / -1; color: var(--text-muted); font-size: 1.2vh; margin-top: .1vh; }
+
+  /* Per-transaction location breakdown, shown as labeled Zone/Row/Bay/Level/
+     Position segments rather than a dash-joined string -- same "break it
+     out visually" convention as the reconcile confirm page's location table. */
+  .loc-line { grid-column: 1 / -1; display: flex; align-items: center; flex-wrap: wrap; gap: .6vw; margin-top: .4vh; }
+  .loc-block { display: inline-flex; align-items: center; gap: .6vw; }
+  .loc-dir {
+    font-size: 1vh; font-weight: 800; text-transform: uppercase; letter-spacing: .05em;
+    color: var(--text-muted);
+  }
+  .loc-arrow { color: var(--text-muted); font-size: 1.4vh; }
+  .loc-seg { display: inline-flex; flex-direction: column; line-height: 1.1; }
+  .loc-seg .loc-label {
+    font-size: .95vh; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted);
+  }
+  .loc-seg .loc-val { font-size: 1.4vh; font-weight: 700; color: var(--text-secondary); }
+
+  /* Inventory summary */
+  table { width: 100%; border-collapse: collapse; font-size: 1.6vh; }
+  thead th {
+    position: sticky; top: 0; background: var(--panel); text-align: left; font-size: 1.2vh;
+    text-transform: uppercase; letter-spacing: .06em; color: var(--text-secondary);
+    padding: .5vh .5vw; border-bottom: 1px solid var(--panel-border);
+  }
+  thead th.num, td.num { text-align: right; }
+  tbody td { padding: .7vh .5vw; border-bottom: 1px solid var(--panel-border); }
+  tbody tr:hover td { background: rgba(255,255,255,.02); }
+  .qty-low { color: var(--amber); font-weight: 800; }
+  .qty-zero { color: var(--red); font-weight: 800; }
+
+  .empty { color: var(--text-muted); font-size: 1.6vh; padding: 2vh; text-align: center; }
+
+  /* Sign-in overlay */
+  #signin-overlay {
+    position: fixed; inset: 0; background: var(--bg); display: flex; align-items: center;
+    justify-content: center; z-index: 50;
+  }
+  #signin-overlay .card {
+    background: var(--panel); border: 1px solid var(--panel-border); border-radius: 16px;
+    padding: 4vh 4vw; text-align: center; max-width: 480px;
+  }
+  #signin-overlay h2 { font-size: 2.2vh; margin-bottom: 1.5vh; }
+  #signin-overlay p { color: var(--text-secondary); font-size: 1.6vh; margin-bottom: 2.5vh; line-height: 1.5; }
+  #signin-overlay button {
+    font-size: 1.8vh; font-weight: 700; padding: 1.2vh 2.5vw; border-radius: 10px; border: none;
+    background: var(--accent); color: #fff; cursor: pointer;
+  }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<div id="signin-overlay" class="hidden">
+  <div class="card">
+    <h2>Sign-in required</h2>
+    <p id="signin-message">This display needs to sign in to ArcGIS Online once. After that it stays
+      signed in on its own and won't ask again until the session genuinely expires.</p>
+    <button id="signin-btn">Sign In</button>
+  </div>
+</div>
+
+<div id="app" class="hidden">
+  <header>
+    <h1>LINC Warehouse &mdash; Live Activity</h1>
+    <div class="status">
+      <span id="status-dot" class="dot"></span>
+      <span id="status-text">Loading&hellip;</span>
+    </div>
+  </header>
+  <main>
+    <section class="panel">
+      <h2>Transaction Log</h2>
+      <div id="txn-log" class="scroll"><div class="empty">Loading transactions&hellip;</div></div>
+    </section>
+    <section class="panel">
+      <h2>Inventory Summary</h2>
+      <div id="inv-summary" class="scroll"><div class="empty">Loading inventory&hellip;</div></div>
+    </section>
+  </main>
+</div>
+
+<script>
+"use strict";
+
+// ===========================================================================
+// Configuration
+// ===========================================================================
+const CONFIG = {
+  clientId: "FnhvYkFpFjKff2RT",
+  redirectUri: "https://temagis.github.io/LINC_Display/",
+  portal: "https://www.arcgis.com/sharing/rest",
+  transactionsItemId: "6dfb43b544cb4d2bb4a13e2b1187b5f5",
+  balanceItemId: "812418a81b474a4fbc2247d2fbd44061",
+  // How long (minutes) the requested refresh token should stay valid before
+  // a human has to physically sign in on this kiosk again. ArcGIS caps this
+  // at whatever the OAuth app's own settings allow; 20160 = 14 days is a
+  // safe default to request. Raising this is harmless -- the server just
+  // caps it -- so bump it if your org's app permits longer.
+  refreshTokenExpirationMinutes: 20160,
+  // Proactively renew the access token this many seconds before it expires,
+  // rather than waiting for a request to fail first.
+  accessTokenRenewMarginSeconds: 300,
+  dataRefreshIntervalMs: 30000,
+  transactionLogLimit: 30,
+  lowStockThreshold: 5,
+  localStorageKey: "linc_display_credential_v1",
+};
+
+// ===========================================================================
+// PKCE helpers (RFC 7636) -- no external auth library; just Web Crypto +
+// fetch, so this file has zero dependencies and nothing that can go stale
+// or become unavailable from a CDN.
+// ===========================================================================
+function base64UrlEncode(bytes) {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function generateCodeVerifier() {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return base64UrlEncode(bytes);
+}
+
+async function generateCodeChallenge(verifier) {
+  const encoder = new TextEncoder();
+  const digest = await crypto.subtle.digest("SHA-256", encoder.encode(verifier));
+  return base64UrlEncode(new Uint8Array(digest));
+}
+
+// ===========================================================================
+// Auth: OAuth2 Authorization Code + PKCE, with the resulting credential
+// persisted to localStorage so a page reload (or the kiosk rebooting)
+// doesn't require a human to sign in again -- only a genuinely expired
+// refresh token does.
+// ===========================================================================
+const Auth = {
+  credential: null, // { accessToken, refreshToken, expiresAt (epoch ms), username }
+  renewTimer: null,
+
+  loadStored() {
+    try {
+      const raw = localStorage.getItem(CONFIG.localStorageKey);
+      if (!raw) return null;
+      return JSON.parse(raw);
+    } catch (e) {
+      console.warn("DIAG: failed to parse stored credential", e);
+      return null;
+    }
+  },
+
+  save(cred) {
+    this.credential = cred;
+    localStorage.setItem(CONFIG.localStorageKey, JSON.stringify(cred));
+  },
+
+  clear() {
+    this.credential = null;
+    localStorage.removeItem(CONFIG.localStorageKey);
+  },
+
+  async beginLogin() {
+    const verifier = generateCodeVerifier();
+    const challenge = await generateCodeChallenge(verifier);
+    sessionStorage.setItem("linc_pkce_verifier", verifier);
+    const params = new URLSearchParams({
+      client_id: CONFIG.clientId,
+      response_type: "code",
+      redirect_uri: CONFIG.redirectUri,
+      code_challenge: challenge,
+      code_challenge_method: "S256",
+      expiration: String(CONFIG.refreshTokenExpirationMinutes),
+    });
+    window.location.href = `${CONFIG.portal}/oauth2/authorize?${params.toString()}`;
+  },
+
+  /** If the current URL is an OAuth redirect callback (?code=...), exchange
+   *  it for tokens and clean the URL. Returns true if it handled a callback. */
+  async handleRedirectCallback() {
+    const url = new URL(window.location.href);
+    const code = url.searchParams.get("code");
+    if (!code) return false;
+
+    const verifier = sessionStorage.getItem("linc_pkce_verifier");
+    sessionStorage.removeItem("linc_pkce_verifier");
+    if (!verifier) {
+      console.warn("DIAG: got an auth code but no stored PKCE verifier -- restarting login");
+      return false;
+    }
+
+    const body = new URLSearchParams({
+      client_id: CONFIG.clientId,
+      grant_type: "authorization_code",
+      redirect_uri: CONFIG.redirectUri,
+      code: code,
+      code_verifier: verifier,
+    });
+    const resp = await fetch(`${CONFIG.portal}/oauth2/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body.toString(),
+    });
+    const data = await resp.json();
+    if (data.error) throw new Error(`OAuth token exchange failed: ${JSON.stringify(data)}`);
+
+    this.save({
+      accessToken: data.access_token,
+      refreshToken: data.refresh_token,
+      expiresAt: Date.now() + data.expires_in * 1000,
+      username: data.username || null,
+    });
+
+    // Strip ?code=... (and ?state= if present) from the address bar so a
+    // reload doesn't try to redeem the same code twice.
+    url.searchParams.delete("code");
+    url.searchParams.delete("state");
+    history.replaceState({}, "", url.toString());
+    return true;
+  },
+
+  async refreshAccessToken() {
+    if (!this.credential || !this.credential.refreshToken) {
+      throw new Error("no refresh token available");
+    }
+    const body = new URLSearchParams({
+      client_id: CONFIG.clientId,
+      grant_type: "refresh_token",
+      refresh_token: this.credential.refreshToken,
+    });
+    const resp = await fetch(`${CONFIG.portal}/oauth2/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body.toString(),
+    });
+    const data = await resp.json();
+    if (data.error) throw new Error(`OAuth refresh failed: ${JSON.stringify(data)}`);
+
+    this.save({
+      accessToken: data.access_token,
+      // Esri doesn't always reissue a refresh_token on refresh; keep the
+      // existing one unless a new one came back.
+      refreshToken: data.refresh_token || this.credential.refreshToken,
+      expiresAt: Date.now() + data.expires_in * 1000,
+      username: data.username || this.credential.username,
+    });
+  },
+
+  /** Ensure `this.credential.accessToken` is valid, refreshing first if
+   *  it's within the renewal margin of expiring. */
+  async ensureFreshToken() {
+    if (!this.credential) throw new Error("not signed in");
+    const msRemaining = this.credential.expiresAt - Date.now();
+    if (msRemaining < CONFIG.accessTokenRenewMarginSeconds * 1000) {
+      await this.refreshAccessToken();
+    }
+    return this.credential.accessToken;
+  },
+
+  scheduleProactiveRenewal() {
+    if (this.renewTimer) clearTimeout(this.renewTimer);
+    const msUntilRenew = Math.max(
+      10000,
+      this.credential.expiresAt - Date.now() - CONFIG.accessTokenRenewMarginSeconds * 1000
+    );
+    this.renewTimer = setTimeout(async () => {
+      try {
+        await this.refreshAccessToken();
+      } catch (e) {
+        console.warn("DIAG: proactive token renewal failed", e);
+        setStatus("down", "Session expired -- sign-in needed");
+        showSignIn("Your session could not be renewed automatically. Please sign in again.");
+        return;
+      }
+      this.scheduleProactiveRenewal();
+    }, msUntilRenew);
+  },
+};
+
+// ===========================================================================
+// ArcGIS REST helpers
+// ===========================================================================
+const layerUrlCache = {};
+
+async function resolveLayerUrl(itemId) {
+  if (layerUrlCache[itemId]) return layerUrlCache[itemId];
+  const token = await Auth.ensureFreshToken();
+
+  const itemResp = await fetch(`${CONFIG.portal}/content/items/${itemId}?f=json&token=${token}`);
+  const item = await itemResp.json();
+  if (!item.url) throw new Error(`No service URL for item ${itemId}: ${JSON.stringify(item)}`);
+
+  const svcResp = await fetch(`${item.url}?f=json&token=${token}`);
+  const svc = await svcResp.json();
+  // Survey123-published tables with no geometry publish under `tables`;
+  // ones with a location question publish under `layers`. Try both, same
+  // fallback the Lambda functions use.
+  const entry = (svc.tables && svc.tables[0]) || (svc.layers && svc.layers[0]);
+  const layerUrl = entry ? `${item.url}/${entry.id}` : `${item.url}/0`;
+
+  layerUrlCache[itemId] = layerUrl;
+  return layerUrl;
+}
+
+async function queryLayer(layerUrl, { where = "1=1", outFields = "*", orderByFields, resultRecordCount } = {}) {
+  const token = await Auth.ensureFreshToken();
+  const params = new URLSearchParams({ where, outFields, f: "json", token, returnGeometry: "false" });
+  if (orderByFields) params.set("orderByFields", orderByFields);
+  if (resultRecordCount) params.set("resultRecordCount", String(resultRecordCount));
+  const resp = await fetch(`${layerUrl}/query?${params.toString()}`);
+  const data = await resp.json();
+  if (data.error) throw new Error(`Query failed: ${JSON.stringify(data.error)}`);
+  return (data.features || []).map((f) => f.attributes);
+}
+
+// ===========================================================================
+// Rendering
+// ===========================================================================
+function esc(s) {
+  return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function formatEpochMs(ms) {
+  if (!ms) return "";
+  const d = new Date(ms);
+  return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+/** Zone/Row/Bay/Level/Position as a list of [label, value] pairs for one
+ *  side (prefix "from_"/"to_") of a Transactions row. Zone and Position are
+ *  the two segments that are legitimately blank (e.g. an 8-digit code with
+ *  no zone) -- those are simply left out rather than shown with an empty
+ *  value, matching the reconcile confirm page's convention. */
+function locationSegments(attrs, prefix) {
+  const segs = [];
+  const zone = attrs[`${prefix}zone`];
+  if (zone !== undefined && zone !== null && zone !== "") segs.push(["Zone", zone]);
+  segs.push(["Row", attrs[`${prefix}row`]]);
+  segs.push(["Bay", attrs[`${prefix}bay`]]);
+  segs.push(["Level", attrs[`${prefix}level`]]);
+  const position = attrs[`${prefix}position`];
+  if (position !== undefined && position !== null && position !== "") segs.push(["Position", position]);
+  return segs;
+}
+
+function locationSegmentsHtml(attrs, prefix) {
+  return locationSegments(attrs, prefix)
+    .map(([label, value]) => `<span class="loc-seg"><span class="loc-label">${esc(label)}</span><span class="loc-val">${esc(value)}</span></span>`)
+    .join("");
+}
+
+function renderTransactionLog(rows) {
+  const el = document.getElementById("txn-log");
+  if (!rows.length) {
+    el.innerHTML = "<div class='empty'>No transactions yet.</div>";
+    return;
+  }
+  el.innerHTML = rows
+    .map((t) => {
+      const type = esc(t.transaction_type || "");
+      let locLine = "";
+      if (type === "Receive") {
+        locLine = `<div class="loc-block"><span class="loc-dir">To</span>${locationSegmentsHtml(t, "to_")}</div>`;
+      } else if (type === "Ship") {
+        locLine = `<div class="loc-block"><span class="loc-dir">From</span>${locationSegmentsHtml(t, "from_")}</div>`;
+      } else if (type === "Move") {
+        locLine =
+          `<div class="loc-block"><span class="loc-dir">From</span>${locationSegmentsHtml(t, "from_")}</div>` +
+          `<span class="loc-arrow">&rarr;</span>` +
+          `<div class="loc-block"><span class="loc-dir">To</span>${locationSegmentsHtml(t, "to_")}</div>`;
+      }
+      const sign = type === "Ship" ? "&minus;" : type === "Receive" ? "+" : "&plusmn;";
+      return `
+        <div class="txn-row">
+          <span class="txn-type ${type}">${type}</span>
+          <span class="txn-item">${esc(t.item || t.item_sku || "")}</span>
+          <span class="txn-qty">${sign}${esc(t.quantity)}</span>
+          <div class="loc-line">${locLine}</div>
+          <span class="txn-meta">${esc(t.performed_by || "")} &middot; ${formatEpochMs(t.transaction_datetime)}</span>
+        </div>`;
+    })
+    .join("");
+}
+
+function renderInventorySummary(rows) {
+  const el = document.getElementById("inv-summary");
+  if (!rows.length) {
+    el.innerHTML = "<div class='empty'>No inventory recorded yet.</div>";
+    return;
+  }
+
+  // One row per item+location (not rolled up) so Zone/Row/Bay/Level/Position
+  // can be shown as their own labeled columns. NOTE: the Inventory Balance
+  // layer stores "Row" under the field name "aisle" -- same field-naming
+  // quirk documented in reconcile_inventory.py's SEGMENT_FIELD_MAP; the
+  // column header still says "Row" for consistency with the Transaction Log.
+  const sorted = [...rows].sort((a, b) => {
+    const an = a.item || a.item_sku || "";
+    const bn = b.item || b.item_sku || "";
+    if (an !== bn) return an.localeCompare(bn);
+    const az = String(a.zone ?? ""), bz = String(b.zone ?? "");
+    if (az !== bz) return az.localeCompare(bz);
+    const ar = String(a.aisle ?? ""), br = String(b.aisle ?? "");
+    if (ar !== br) return ar.localeCompare(br);
+    const ab = String(a.bay ?? ""), bb = String(b.bay ?? "");
+    if (ab !== bb) return ab.localeCompare(bb);
+    return String(a.level ?? "").localeCompare(String(b.level ?? ""));
+  });
+
+  const bodyRows = sorted
+    .map((r) => {
+      const qty = r.quantity_on_hand || 0;
+      const qtyClass = qty === 0 ? "qty-zero" : qty <= CONFIG.lowStockThreshold ? "qty-low" : "";
+      return `<tr>
+        <td>${esc(r.item || r.item_sku || "")}</td>
+        <td>${esc(r.zone ?? "")}</td>
+        <td>${esc(r.aisle ?? "")}</td>
+        <td>${esc(r.bay ?? "")}</td>
+        <td>${esc(r.level ?? "")}</td>
+        <td>${esc(r.position ?? "")}</td>
+        <td class="num ${qtyClass}">${qty}</td>
+      </tr>`;
+    })
+    .join("");
+
+  el.innerHTML = `
+    <table>
+      <thead><tr>
+        <th>Item</th><th>Zone</th><th>Row</th><th>Bay</th><th>Level</th><th>Position</th>
+        <th class="num">Qty On Hand</th>
+      </tr></thead>
+      <tbody>${bodyRows}</tbody>
+    </table>`;
+}
+
+// ===========================================================================
+// Status indicator + sign-in overlay
+// ===========================================================================
+function setStatus(level, text) {
+  document.getElementById("status-dot").className = `dot ${level === "ok" ? "" : level}`;
+  document.getElementById("status-text").textContent = text;
+}
+
+function showSignIn(message) {
+  document.getElementById("app").classList.add("hidden");
+  const overlay = document.getElementById("signin-overlay");
+  if (message) document.getElementById("signin-message").textContent = message;
+  overlay.classList.remove("hidden");
+}
+
+function showApp() {
+  document.getElementById("signin-overlay").classList.add("hidden");
+  document.getElementById("app").classList.remove("hidden");
+}
+
+// ===========================================================================
+// Main polling loop
+// ===========================================================================
+async function refreshData() {
+  try {
+    const [txnUrl, balUrl] = await Promise.all([
+      resolveLayerUrl(CONFIG.transactionsItemId),
+      resolveLayerUrl(CONFIG.balanceItemId),
+    ]);
+    const [txns, balances] = await Promise.all([
+      queryLayer(txnUrl, {
+        orderByFields: "transaction_datetime DESC",
+        resultRecordCount: CONFIG.transactionLogLimit,
+      }),
+      queryLayer(balUrl),
+    ]);
+    renderTransactionLog(txns);
+    renderInventorySummary(balances);
+    setStatus("ok", `Updated ${new Date().toLocaleTimeString()}`);
+  } catch (e) {
+    console.warn("DIAG: refreshData failed", e);
+    setStatus("stale", `Last update failed at ${new Date().toLocaleTimeString()}`);
+  }
+}
+
+async function init() {
+  document.getElementById("signin-btn").addEventListener("click", () => Auth.beginLogin());
+
+  const handledCallback = await Auth.handleRedirectCallback().catch((e) => {
+    console.warn("DIAG: redirect callback handling failed", e);
+    return false;
+  });
+
+  if (!handledCallback) {
+    Auth.credential = Auth.loadStored();
+  }
+
+  if (!Auth.credential) {
+    showSignIn();
+    return;
+  }
+
+  try {
+    await Auth.ensureFreshToken();
+  } catch (e) {
+    console.warn("DIAG: stored session could not be renewed", e);
+    Auth.clear();
+    showSignIn("Your saved session expired. Please sign in again.");
+    return;
+  }
+
+  Auth.scheduleProactiveRenewal();
+  showApp();
+  refreshData();
+  setInterval(refreshData, CONFIG.dataRefreshIntervalMs);
+}
+
+init();
+</script>
+</body>
+</html>
