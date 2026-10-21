@@ -10,9 +10,9 @@
     --panel: #101a2e;
     --panel-border: #1e2c47;
     --text-primary: #eef2ff;
-    --text-secondary: #8b9bc2;
-    --text-muted: #4b5878;
-    --accent: #3b82f6;
+    --text-secondary: #c9d4ec;
+    --text-muted: #a3b2d4;
+    --accent: #2563eb;
     --green: #22c55e;
     --red: #ef4444;
     --amber: #f59e0b;
@@ -54,15 +54,15 @@
     gap: .8vw; padding: .9vh .4vw; border-bottom: 1px solid var(--panel-border); font-size: 1.7vh;
   }
   .txn-type {
-    font-size: 1.2vh; font-weight: 800; text-transform: uppercase; letter-spacing: .05em;
+    font-size: max(11px, 1.2vh); font-weight: 800; text-transform: uppercase; letter-spacing: .05em;
     padding: .3vh .7vw; border-radius: 999px; white-space: nowrap;
   }
-  .txn-type.Receive { background: rgba(34,197,94,.15); color: var(--green); }
-  .txn-type.Ship { background: rgba(239,68,68,.15); color: var(--red); }
-  .txn-type.Move { background: rgba(59,130,246,.15); color: var(--accent); }
+  .txn-type.Receive { background: rgba(34,197,94,.18); color: #6ee7a0; }
+  .txn-type.Ship { background: rgba(239,68,68,.18); color: #ff9a9a; }
+  .txn-type.Move { background: rgba(59,130,246,.18); color: #9cc2ff; }
   .txn-item { color: var(--text-primary); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .txn-qty { font-weight: 800; font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
-  .txn-meta { grid-column: 1 / -1; color: var(--text-muted); font-size: 1.2vh; margin-top: .1vh; }
+  .txn-meta { grid-column: 1 / -1; color: var(--text-muted); font-size: max(12px, 1.2vh); margin-top: .1vh; }
 
   /* Per-transaction location breakdown, shown as labeled Zone/Row/Bay/Level/
      Position segments rather than a dash-joined string -- same "break it
@@ -70,15 +70,15 @@
   .loc-line { grid-column: 1 / -1; display: flex; align-items: center; flex-wrap: wrap; gap: .6vw; margin-top: .4vh; }
   .loc-block { display: inline-flex; align-items: center; gap: .6vw; }
   .loc-dir {
-    font-size: 1vh; font-weight: 800; text-transform: uppercase; letter-spacing: .05em;
+    font-size: max(11px, 1vh); font-weight: 800; text-transform: uppercase; letter-spacing: .05em;
     color: var(--text-muted);
   }
   .loc-arrow { color: var(--text-muted); font-size: 1.4vh; }
   .loc-seg { display: inline-flex; flex-direction: column; line-height: 1.1; }
   .loc-seg .loc-label {
-    font-size: .95vh; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted);
+    font-size: max(10px, .95vh); text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted);
   }
-  .loc-seg .loc-val { font-size: 1.4vh; font-weight: 700; color: var(--text-secondary); }
+  .loc-seg .loc-val { font-size: max(14px, 1.4vh); font-weight: 700; color: var(--text-primary); }
 
   /* Inventory summary */
   table { width: 100%; border-collapse: collapse; font-size: 1.6vh; }
@@ -127,7 +127,7 @@
     font-size: 15px; font-weight: 700; padding: 12px 18px; border-radius: 10px; border: none;
     background: var(--accent); color: #fff; cursor: pointer; white-space: nowrap;
   }
-  .lk-btn.secondary { background: transparent; border: 1px solid var(--accent); color: #7fb0ff; }
+  .lk-btn.secondary { background: transparent; border: 1px solid #7fb0ff; color: #b3d0ff; }
   #lk-results { flex: 1; min-height: 0; overflow-y: auto; }
   .crumbs { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 12px; }
   .crumb {
@@ -147,9 +147,20 @@
   }
   .lk-stats { display: flex; gap: 24px; flex-wrap: wrap; }
   .lk-stat .n { font-size: 26px; font-weight: 800; font-variant-numeric: tabular-nums; }
-  .lk-stat .l { font-size: 11px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: .06em; }
+  .lk-stat .l { font-size: 12px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: .06em; }
   tr.drill { cursor: pointer; }
-  tr.drill:hover td { background: rgba(59,130,246,.12); }
+  tr.drill td { padding-top: 6px; padding-bottom: 6px; }
+  .drill-btn {
+    display: inline-flex; align-items: center; justify-content: space-between; gap: 14px;
+    min-width: 130px; min-height: 42px; padding: 8px 14px; border-radius: 10px;
+    background: var(--accent); color: #fff; font-size: 15px; font-weight: 700;
+    box-shadow: 0 2px 0 rgba(0,0,0,.4); transition: background .12s, transform .06s;
+  }
+  .drill-btn .chev { font-size: 22px; line-height: 1; }
+  tr.drill:hover .drill-btn { background: #1d4ed8; }
+  tr.drill:active .drill-btn { transform: translateY(2px); box-shadow: none; }
+  tr.drill:focus { outline: none; }
+  tr.drill:focus-visible .drill-btn { outline: 3px solid #b3d0ff; outline-offset: 2px; }
   .lk-loc { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
 
   /* Camera scan overlay */
@@ -760,8 +771,8 @@ function renderLookupResult(res) {
   for (const label of Object.keys(res.groups)) {
     const entries = Object.values(res.groups[label]).sort((a, b) => naturalCompare(a.value, b.value));
     const rows = entries
-      .map((e) => `<tr class="drill" data-q="${escAttr(e.drill)}">
-        <td>${esc(e.value)} &rsaquo;</td>
+      .map((e) => `<tr class="drill" data-q="${escAttr(e.drill)}" role="button" tabindex="0">
+        <td><span class="drill-btn"><span>${esc(label)} ${esc(e.value)}</span><span class="chev">&rsaquo;</span></span></td>
         <td class="num">${e.locs.size}</td><td class="num">${e.skus.size}</td><td class="num">${e.qty}</td>
       </tr>`)
       .join("");
@@ -927,6 +938,11 @@ function wireLookupUi() {
   $("lk-scan").addEventListener("click", () => Scanner.start((text) => runLookup(text)));
   $("scan-cancel").addEventListener("click", () => Scanner.stop());
   $("lk-site").addEventListener("change", (e) => { Lookup.site = e.target.value; renderLookupFromState(); });
+  $("lk-results").addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const row = e.target && e.target.closest ? e.target.closest("tr.drill") : null;
+    if (row) { e.preventDefault(); runLookup(row.getAttribute("data-q")); }
+  });
   $("lk-results").addEventListener("click", (e) => {
     const closest = (sel) => (e.target && e.target.closest ? e.target.closest(sel) : null);
     const tab = closest("[data-tab]");
