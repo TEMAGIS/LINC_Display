@@ -166,6 +166,7 @@
     background: var(--accent); color: #fff; font-size: 15px; font-weight: 700;
     box-shadow: 0 2px 0 rgba(0,0,0,.4); transition: background .12s, transform .06s;
   }
+  .drill-btn small.skuline { display: block; font-size: 11px; font-weight: 600; opacity: .85; }
   .drill-btn .chev { font-size: 22px; line-height: 1; }
   tr.drill:hover .drill-btn { background: #1d4ed8; }
   tr.drill:active .drill-btn { transform: translateY(2px); box-shadow: none; }
@@ -532,7 +533,7 @@ function locationSegmentsHtml(attrs, prefix) {
 // (which can be blank on older rows). A short code like "22" therefore matches
 // both zone 22 and row 22 (when there's no zone) -- the data decides.
 // ===========================================================================
-const Lookup = { balances: [], txns: [], volumes: {}, query: "", site: "", tab: "stock", loaded: false };
+const Lookup = { balances: [], txns: [], volumes: {}, item: null, query: "", site: "", tab: "stock", loaded: false };
 
 // ---- Water: approximate gallons ------------------------------------------
 // gallons-per-unit comes from the Barcode Library (per-item `volume` in
@@ -633,12 +634,14 @@ function summarizeLookup(rows, rawQuery) {
   let totalQty = 0;
   let matchedCount = 0;
   let sampleSegs = null;
+  const matchedRows = [];
 
   for (const r of rows) {
     const segs = rowSegments(r);
     const code = segs.map((s) => s.value).join("");
     if (!code.toLowerCase().startsWith(q)) continue;
     matchedCount++;
+    matchedRows.push({ r, segs, code });
     if (!sampleSegs) sampleSegs = segs;
 
     const qty = Number(r.quantity_on_hand) || 0;
@@ -705,7 +708,7 @@ function summarizeLookup(rows, rawQuery) {
   }
 
   return {
-    q, rawQuery, matchedCount, locationCount: locations.size, totalQty,
+    q, rawQuery, matchedCount, matchedRows, locationCount: locations.size, totalQty,
     itemCount: Object.keys(items).length, groups, crumbs, itemMatches,
     leaves: Object.values(leafByCode).sort((a, b) => naturalCompare(a.code, b.code)),
     items: Object.values(items).sort((a, b) => naturalCompare(a.name, b.name)),
@@ -747,8 +750,7 @@ function scopedTransactions(txns, rawQuery) {
 }
 
 function renderTxnView(crumbs) {
-  const rows = (Lookup.site ? Lookup.txns.filter((t) => (t.site || "") === Lookup.site) : Lookup.txns);
-  const scoped = scopedTransactions(rows, Lookup.query);
+  const scoped = scopedTransactions(txnPool(), Lookup.query);
   let qtyIn = 0, qtyOut = 0, within = 0;
   for (const x of scoped) {
     const n = Number(x.t.quantity) || 0;
@@ -799,9 +801,10 @@ function renderLookupResult(res) {
     `<div class="crumbs"><button class="crumb root" data-q="">Warehouse</button>` +
     res.crumbs.map((c) => `<button class="crumb" data-q="${escAttr(c.prefix)}">${esc(c.label)} ${esc(c.value)}</button>`).join("") +
     `</div>` +
+    (Lookup.item ? `<div class="crumbs"><button class="crumb sel" data-clear-item="1">Item: ${esc(Lookup.item.name)} &times;</button></div>` : "") +
     `<div class="crumbs lk-tabs">
       <button class="crumb ${Lookup.tab === "stock" ? "sel" : ""}" data-tab="stock">Stock</button>
-      <button class="crumb ${Lookup.tab === "txns" ? "sel" : ""}" data-tab="txns">Transactions (${scopedTransactions(Lookup.txns, Lookup.query).length})</button>
+      <button class="crumb ${Lookup.tab === "txns" ? "sel" : ""}" data-tab="txns">Transactions (${scopedTransactions(txnPool(), Lookup.query).length})</button>
     </div>`;
 
   if (Lookup.tab === "txns") {
@@ -838,6 +841,25 @@ function renderLookupResult(res) {
     }
   </div></div>`;
 
+  if (Lookup.item) {
+    const locRows = res.matchedRows
+      .slice().sort((a, b) => naturalCompare(a.code, b.code))
+      .map(({ r, segs, code }) => {
+        const qty = Number(r.quantity_on_hand) || 0;
+        const qtyClass = qty === 0 ? "qty-zero" : qty <= CONFIG.lowStockThreshold ? "qty-low" : "";
+        return `<tr class="drill" data-q="${escAttr(code)}" role="button" tabindex="0">
+          <td><span class="drill-btn"><span>${esc(segs.map((s) => s.value).join("-"))}</span><span class="chev">&rsaquo;</span></span></td>
+          <td>${esc(r.lot_number ?? "")}</td>
+          <td class="num ${qtyClass}">${fmtNum(qty)}${unitHtml(r.unit_of_measure)}${gallonsHtml(r.item_sku, r.item, qty)}</td>
+        </tr>`;
+      }).join("");
+    html += `<div class="lk-card"><h3>Where to find ${esc(Lookup.item.name)}</h3>
+      <table><thead><tr><th>Location</th><th>Lot</th><th class="num">On hand</th></tr></thead>
+      <tbody>${locRows}</tbody></table></div>`;
+    el.innerHTML = html;
+    return;
+  }
+
   for (const label of Object.keys(res.groups)) {
     const entries = Object.values(res.groups[label]).sort((a, b) => naturalCompare(a.value, b.value));
     const rows = entries
@@ -872,7 +894,7 @@ function renderLookupResult(res) {
   const singleLeafOnly = res.leaves.length === 1 && Object.keys(res.groups).length === 0;
   if (!singleLeafOnly) {
     const rows = res.items
-      .map((it) => `<tr><td>${esc(it.name)}</td><td class="num">${fmtNum(it.locs.size)}</td><td class="num">${fmtNum(it.qty)}${unitHtml(it.unit)}${gallonsHtml(it.sku, it.name, it.qty)}</td></tr>`)
+      .map((it) => `<tr class="drill" data-item="${escAttr(it.sku)}" data-name="${escAttr(it.name)}" role="button" tabindex="0"><td><span class="drill-btn"><span>${esc(it.name)}${it.name !== it.sku ? `<small class="skuline">${esc(it.sku)}</small>` : ""}</span><span class="chev">&rsaquo;</span></span></td><td class="num">${fmtNum(it.locs.size)}</td><td class="num">${fmtNum(it.qty)}${unitHtml(it.unit)}${gallonsHtml(it.sku, it.name, it.qty)}</td></tr>`)
       .join("");
     html += `<div class="lk-card"><h3>Items in this scope</h3>
       <table><thead><tr><th>Item</th><th class="num">Locations</th><th class="num">Qty</th></tr></thead>
@@ -881,8 +903,18 @@ function renderLookupResult(res) {
   el.innerHTML = html;
 }
 
+const skuOf = (r) => r.item_sku || "(unknown)";
+
 function filteredBalances() {
-  return Lookup.site ? Lookup.balances.filter((r) => (r.site || "") === Lookup.site) : Lookup.balances;
+  let rows = Lookup.site ? Lookup.balances.filter((r) => (r.site || "") === Lookup.site) : Lookup.balances;
+  if (Lookup.item) rows = rows.filter((r) => skuOf(r) === Lookup.item.sku);
+  return rows;
+}
+
+function txnPool() {
+  let rows = Lookup.site ? Lookup.txns.filter((t) => (t.site || "") === Lookup.site) : Lookup.txns;
+  if (Lookup.item) rows = rows.filter((t) => (t.item_sku || "(unknown)") === Lookup.item.sku);
+  return rows;
 }
 
 function populateSiteSelect() {
@@ -1029,17 +1061,27 @@ function wireLookupUi() {
   $("lk-scan").addEventListener("click", () => Scanner.start((text) => runLookup(text)));
   $("scan-cancel").addEventListener("click", () => Scanner.stop());
   $("lk-site").addEventListener("change", (e) => { Lookup.site = e.target.value; renderLookupFromState(); });
+  const navigate = (el) => {
+    const tab = el.closest("[data-tab]");
+    if (tab) { Lookup.tab = tab.getAttribute("data-tab"); renderLookupFromState(); return; }
+    if (el.closest("[data-clear-item]")) { Lookup.item = null; renderLookupFromState(); return; }
+    const item = el.closest("[data-item]");
+    if (item) {
+      Lookup.item = { sku: item.getAttribute("data-item"), name: item.getAttribute("data-name") || item.getAttribute("data-item") };
+      Lookup.tab = "stock";
+      renderLookupFromState();
+      return;
+    }
+    const q = el.closest("[data-q]");
+    if (q) runLookup(q.getAttribute("data-q"));
+  };
   $("lk-results").addEventListener("keydown", (e) => {
     if (e.key !== "Enter" && e.key !== " ") return;
     const row = e.target && e.target.closest ? e.target.closest("tr.drill") : null;
-    if (row) { e.preventDefault(); runLookup(row.getAttribute("data-q")); }
+    if (row) { e.preventDefault(); navigate(row); }
   });
   $("lk-results").addEventListener("click", (e) => {
-    const closest = (sel) => (e.target && e.target.closest ? e.target.closest(sel) : null);
-    const tab = closest("[data-tab]");
-    if (tab) { Lookup.tab = tab.getAttribute("data-tab"); renderLookupFromState(); return; }
-    const t = closest("[data-q]");
-    if (t) runLookup(t.getAttribute("data-q"));
+    if (e.target && e.target.closest) navigate(e.target);
   });
 }
 
