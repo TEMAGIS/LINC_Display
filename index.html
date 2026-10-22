@@ -646,7 +646,8 @@ function segsHtml(segs) {
 }
 
 /** Pure function: rows + query -> summary structure (no DOM). */
-function summarizeLookup(rows, rawQuery) {
+function summarizeLookup(rows, rawQuery, opts) {
+  const searchItems = !(opts && opts.items === false);
   const q = normalizeQuery(rawQuery);
   const items = {};
   const groups = {};      // next-segment label -> value -> aggregate
@@ -717,7 +718,8 @@ function summarizeLookup(rows, rawQuery) {
   const text = String(rawQuery ?? "").trim().toLowerCase();
   const words = text.split(/\s+/).filter(Boolean);
   const digitsOnly = /^[\d\s-]+$/.test(text);
-  if (words.length) {
+  // A query that matches locations is a location search -- items only when nothing matched.
+  if (searchItems && matchedCount === 0 && words.length) {
     const bySku = {};
     for (const r of rows) {
       const skuLc = String(r.item_sku || "").toLowerCase();
@@ -977,7 +979,7 @@ function populateSiteSelect() {
 
 function renderLookupFromState() {
   populateSiteSelect();
-  renderLookupResult(summarizeLookup(filteredBalances(), Lookup.query));
+  renderLookupResult(summarizeLookup(filteredBalances(), Lookup.query, { items: !Lookup.navOnly }));
 }
 
 async function loadData() {
@@ -1020,7 +1022,10 @@ async function loadVolumes() {
   }
 }
 
-async function runLookup(query) {
+/** nav=true when the query came from tapping a breadcrumb / location button:
+ *  pure location navigation, so item search is skipped. */
+async function runLookup(query, nav) {
+  Lookup.navOnly = !!nav;
   Lookup.query = String(query ?? "");
   document.getElementById("lk-input").value = Lookup.query;
   try {
@@ -1033,7 +1038,7 @@ async function runLookup(query) {
   if (Lookup.item && /[^\d\s-]/.test(Lookup.query)) Lookup.item = null;
   // Item search that resolves to exactly one item (and no location): go straight to
   // that item's "Where to find" list instead of the intermediate picker.
-  if (!Lookup.item && Lookup.query.trim()) {
+  if (!Lookup.navOnly && !Lookup.item && Lookup.query.trim()) {
     populateSiteSelect();
     const res = summarizeLookup(filteredBalances(), Lookup.query);
     if (res.matchedCount === 0 && res.itemMatches.length === 1) {
@@ -1141,7 +1146,7 @@ function wireLookupUi() {
       return;
     }
     const q = el.closest("[data-q]");
-    if (q) runLookup(q.getAttribute("data-q"));
+    if (q) runLookup(q.getAttribute("data-q"), true);
   };
   $("lk-results").addEventListener("keydown", (e) => {
     if (e.key !== "Enter" && e.key !== " ") return;
