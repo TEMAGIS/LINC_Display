@@ -1,28 +1,1175 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Public Contacts Directory</title>
-  <link rel="stylesheet" href="styles.css" />
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LINC Warehouse Display</title>
+<style>
+  :root {
+    --bg: #0b1220;
+    --panel: #101a2e;
+    --panel-border: #1e2c47;
+    --text-primary: #eef2ff;
+    --text-secondary: #c9d4ec;
+    --text-muted: #a3b2d4;
+    --accent: #2563eb;
+    --green: #22c55e;
+    --red: #ef4444;
+    --amber: #f59e0b;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    height: 100%; background: var(--bg); color: var(--text-primary);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    overflow: hidden;
+  }
+  #app { height: 100vh; display: flex; flex-direction: column; padding: 1.5vh 1.5vw; gap: 1.2vh; }
+
+  header {
+    display: flex; align-items: baseline; justify-content: space-between;
+    padding-bottom: .6vh; border-bottom: 2px solid var(--panel-border);
+  }
+  header h1 { font-size: 2.6vh; font-weight: 800; letter-spacing: .02em; }
+  header .status { font-size: 1.5vh; color: var(--text-secondary); display: flex; align-items: center; gap: .8vw; }
+  .dot { width: .9vh; height: .9vh; border-radius: 50%; background: var(--green); display: inline-block; }
+  .dot.stale { background: var(--amber); }
+  .dot.down { background: var(--red); }
+
+  .panel {
+    background: var(--panel); border: 1px solid var(--panel-border); border-radius: 12px;
+    padding: 1.2vh 1.2vw; display: flex; flex-direction: column; min-height: 0;
+  }
+  .panel h2 {
+    font-size: 1.9vh; font-weight: 700; color: var(--text-secondary);
+    text-transform: uppercase; letter-spacing: .08em; padding-bottom: .8vh;
+    border-bottom: 1px solid var(--panel-border); margin-bottom: .6vh; flex-shrink: 0;
+  }
+  .scroll { overflow-y: auto; flex: 1; min-height: 0; }
+  .scroll::-webkit-scrollbar { width: 8px; }
+  .scroll::-webkit-scrollbar-thumb { background: var(--panel-border); border-radius: 4px; }
+
+  /* Transaction log */
+  .txn-row {
+    display: grid; grid-template-columns: auto 1fr auto; align-items: center;
+    gap: .8vw; padding: .9vh .4vw; border-bottom: 1px solid var(--panel-border); font-size: 1.7vh;
+  }
+  .txn-type {
+    font-size: max(11px, 1.2vh); font-weight: 800; text-transform: uppercase; letter-spacing: .05em;
+    padding: .3vh .7vw; border-radius: 999px; white-space: nowrap;
+  }
+  .txn-type.Receive { background: rgba(34,197,94,.18); color: #6ee7a0; }
+  .txn-type.Ship { background: rgba(239,68,68,.18); color: #ff9a9a; }
+  .txn-type.Move { background: rgba(59,130,246,.18); color: #9cc2ff; }
+  .txn-item { color: var(--text-primary); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .txn-qty {
+    font-weight: 800; font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap;
+    font-size: max(28px, 3.4vh); line-height: 1;
+  }
+  .unit.gal { color: #9cc2ff; }
+  .txn-qtywrap { text-align: right; }
+  .unit { display: block; font-size: 12px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em; margin-top: 2px; }
+  .txn-qtywrap .unit { font-size: max(13px, 1.4vh); }
+  .txn-qty.in { color: #6ee7a0; }
+  .txn-qty.out { color: #ff9a9a; }
+  .txn-qty.within { color: #9cc2ff; }
+  .txn-meta { grid-column: 1 / -1; color: var(--text-muted); font-size: max(12px, 1.2vh); margin-top: .1vh; }
+
+  /* Per-transaction location breakdown, shown as labeled Zone/Row/Bay/Level/
+     Position segments rather than a dash-joined string -- same "break it
+     out visually" convention as the reconcile confirm page's location table. */
+  .loc-line { grid-column: 1 / -1; display: flex; align-items: center; flex-wrap: wrap; gap: .6vw; margin-top: .4vh; }
+  .loc-block { display: inline-flex; align-items: center; gap: .6vw; }
+  .loc-dir {
+    font-size: max(11px, 1vh); font-weight: 800; text-transform: uppercase; letter-spacing: .05em;
+    color: var(--text-muted);
+  }
+  .loc-arrow { color: var(--text-muted); font-size: 1.4vh; }
+  .loc-seg { display: inline-flex; flex-direction: column; line-height: 1.1; }
+  .loc-seg .loc-label {
+    font-size: max(10px, .95vh); text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted);
+  }
+  .loc-seg .loc-val { font-size: max(14px, 1.4vh); font-weight: 700; color: var(--text-primary); }
+
+  /* Inventory summary */
+  table { width: 100%; border-collapse: collapse; font-size: 1.6vh; }
+  thead th {
+    position: sticky; top: 0; background: var(--panel); text-align: left; font-size: 1.2vh;
+    text-transform: uppercase; letter-spacing: .06em; color: var(--text-secondary);
+    padding: .5vh .5vw; border-bottom: 1px solid var(--panel-border);
+  }
+  thead th.num, td.num { text-align: right; }
+  tbody td { padding: .7vh .5vw; border-bottom: 1px solid var(--panel-border); }
+  tbody tr:hover td { background: rgba(255,255,255,.02); }
+  .qty-low { color: var(--amber); font-weight: 800; }
+  .qty-zero { color: var(--red); font-weight: 800; }
+
+  .empty { color: var(--text-muted); font-size: 1.6vh; padding: 2vh; text-align: center; }
+
+  /* Sign-in overlay */
+  #signin-overlay {
+    position: fixed; inset: 0; background: var(--bg); display: flex; align-items: center;
+    justify-content: center; z-index: 50;
+  }
+  #signin-overlay .card {
+    background: var(--panel); border: 1px solid var(--panel-border); border-radius: 16px;
+    padding: 4vh 4vw; text-align: center; max-width: 480px;
+  }
+  #signin-overlay h2 { font-size: 2.2vh; margin-bottom: 1.5vh; }
+  #signin-overlay p { color: var(--text-secondary); font-size: 1.6vh; margin-bottom: 2.5vh; line-height: 1.5; }
+  #signin-overlay button {
+    font-size: 1.8vh; font-weight: 700; padding: 1.2vh 2.5vw; border-radius: 10px; border: none;
+    background: var(--accent); color: #fff; cursor: pointer;
+  }
+  .hidden { display: none !important; }
+
+  /* Location lookup -- px sizing so it stays readable on phones */
+  #view-lookup {
+    flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px;
+    width: 100%; max-width: 960px; margin: 0 auto;
+  }
+  .lk-bar { display: flex; gap: 8px; flex-wrap: wrap; flex-shrink: 0; }
+  .lk-bar input, .lk-bar select {
+    font-size: 16px; padding: 12px 14px; border-radius: 10px; min-width: 0;
+    border: 1px solid var(--panel-border); background: var(--panel); color: var(--text-primary);
+  }
+  .lk-bar input { flex: 1 1 220px; }
+  .lk-btn {
+    font-size: 15px; font-weight: 700; padding: 12px 18px; border-radius: 10px; border: none;
+    background: var(--accent); color: #fff; cursor: pointer; white-space: nowrap;
+  }
+  .lk-btn.secondary { background: transparent; border: 1px solid #7fb0ff; color: #b3d0ff; }
+  #lk-results { flex: 1; min-height: 0; overflow-y: auto; }
+  .crumbs { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 12px; }
+  .crumb {
+    background: var(--panel); border: 1px solid var(--panel-border); color: var(--text-primary);
+    border-radius: 999px; padding: 6px 12px; font-size: 14px; font-weight: 700; cursor: pointer;
+  }
+  .crumb.root { color: var(--text-secondary); }
+  .crumb.sel { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .lk-tabs { margin-bottom: 12px; }
+  .lk-card {
+    background: var(--panel); border: 1px solid var(--panel-border); border-radius: 12px;
+    padding: 12px; margin-bottom: 12px;
+  }
+  .lk-card h3 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: .08em;
+    color: var(--text-secondary); margin-bottom: 8px;
+  }
+  .lk-stats { display: flex; gap: 24px; flex-wrap: wrap; }
+  .lk-stat .n { font-size: 26px; font-weight: 800; font-variant-numeric: tabular-nums; }
+  .lk-stat .l { font-size: 12px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: .06em; }
+  tr.drill { cursor: pointer; }
+  tr.drill td { padding-top: 6px; padding-bottom: 6px; }
+  .drill-btn {
+    display: inline-flex; align-items: center; justify-content: space-between; gap: 14px;
+    min-width: 130px; min-height: 42px; padding: 8px 14px; border-radius: 10px;
+    background: var(--accent); color: #fff; font-size: 15px; font-weight: 700;
+    box-shadow: 0 2px 0 rgba(0,0,0,.4); transition: background .12s, transform .06s;
+  }
+  .drill-btn small.skuline { display: block; font-size: 11px; font-weight: 600; opacity: .85; }
+  .drill-btn .chev { font-size: 22px; line-height: 1; }
+  tr.drill:hover .drill-btn { background: #1d4ed8; }
+  tr.drill:active .drill-btn { transform: translateY(2px); box-shadow: none; }
+  tr.drill:focus { outline: none; }
+  tr.drill:focus-visible .drill-btn { outline: 3px solid #b3d0ff; outline-offset: 2px; }
+  .lk-loc { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+
+  /* Camera scan overlay */
+  #scan-overlay { position: fixed; inset: 0; background: #000; z-index: 60; display: flex; flex-direction: column; }
+  #scan-overlay video { flex: 1; min-height: 0; width: 100%; object-fit: cover; }
+  #scan-bar {
+    padding: 14px; display: flex; justify-content: space-between; align-items: center; gap: 12px;
+    background: #000; color: #fff; font-size: 15px;
+  }
+
+  /* Phones / narrow screens: scrollable page, px sizing, stacked panels */
+  @media (max-width: 900px) {
+    html, body { overflow: auto; height: auto; }
+    #app { height: auto; min-height: 100vh; padding: 10px; gap: 10px; }
+    header { flex-wrap: wrap; gap: 8px; align-items: center; }
+    header h1 { font-size: 18px; }
+    header .status { font-size: 12px; gap: 8px; }
+    .dot { width: 9px; height: 9px; }
+    .panel { padding: 10px; max-height: 70vh; }
+    .panel h2 { font-size: 14px; }
+    .txn-row { font-size: 14px; padding: 8px 4px; gap: 8px; }
+    .txn-type { font-size: 11px; padding: 3px 8px; }
+    .txn-meta { font-size: 11px; }
+    .loc-dir { font-size: 10px; }
+    .loc-seg .loc-label { font-size: 9px; }
+    .loc-seg .loc-val { font-size: 13px; }
+    table { font-size: 13px; }
+    thead th { font-size: 11px; padding: 6px; }
+    tbody td { padding: 8px 6px; }
+    .empty { font-size: 14px; padding: 16px; }
+    #view-lookup { min-height: 60vh; }
+    #lk-results { overflow: visible; }
+  }
+</style>
 </head>
 <body>
-  <header class="top">
-    <h1>Contacts Directory</h1>
-    <p class="sub" id="updated"></p>
-  </header>
-  <main>
-    <div class="controls">
-      <label class="sr-only" for="q">Search contacts</label>
-      <input id="q" type="search" placeholder="Search name, organization, title, county…" autocomplete="off" />
-      <div class="pills" id="regions" role="group" aria-label="Filter by region"></div>
-      <label class="sr-only" for="county">County</label>
-      <select id="county"><option value="">All counties</option></select>
+
+<div id="signin-overlay" class="hidden">
+  <div class="card">
+    <h2>Sign-in required</h2>
+    <p id="signin-message">This display needs to sign in to ArcGIS Online once. After that it stays
+      signed in on its own and won't ask again until the session genuinely expires.</p>
+    <button id="signin-btn">Sign In</button>
+  </div>
+</div>
+
+<div id="app" class="hidden">
+  <header>
+    <h1>LINC Warehouse &mdash; Location Lookup</h1>
+    <div class="status">
+      <span id="status-dot" class="dot"></span>
+      <span id="status-text">Loading&hellip;</span>
     </div>
-    <p id="count" role="status" aria-live="polite"></p>
-    <ul id="list"></ul>
-    <button id="more" hidden>Show more</button>
+  </header>
+  <main id="view-lookup">
+    <div class="lk-bar">
+      <input id="lk-input" type="search" autocomplete="off" autocapitalize="off" spellcheck="false"
+             enterkeyhint="search" placeholder="Scan or type a location (e.g. 22, 2233, 22331111)">
+      <button id="lk-search" class="lk-btn">Search</button>
+      <button id="lk-scan" class="lk-btn secondary">Scan</button>
+      <select id="lk-site" class="hidden"></select>
+    </div>
+    <div id="lk-results"><div class="empty">Loading inventory&hellip;</div></div>
   </main>
-  <script src="app.js"></script>
+</div>
+
+<div id="scan-overlay" class="hidden">
+  <video id="scan-video" playsinline muted></video>
+  <div id="scan-bar">
+    <span id="scan-status">Point the camera at a location barcode</span>
+    <button id="scan-cancel" class="lk-btn secondary">Cancel</button>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+// ===========================================================================
+// Configuration
+// ===========================================================================
+const CONFIG = {
+  clientId: "FnhvYkFpFjKff2RT",
+  redirectUri: "https://temagis.github.io/LINC_Display/",
+  portal: "https://www.arcgis.com/sharing/rest",
+  transactionsItemId: "6dfb43b544cb4d2bb4a13e2b1187b5f5",
+  balanceItemId: "812418a81b474a4fbc2247d2fbd44061",
+  // How long (minutes) the requested refresh token should stay valid before
+  // a human has to physically sign in on this kiosk again. ArcGIS caps this
+  // at whatever the OAuth app's own settings allow; 20160 = 14 days is a
+  // safe default to request. Raising this is harmless -- the server just
+  // caps it -- so bump it if your org's app permits longer.
+  refreshTokenExpirationMinutes: 20160,
+  // Proactively renew the access token this many seconds before it expires,
+  // rather than waiting for a request to fail first.
+  accessTokenRenewMarginSeconds: 300,
+  dataRefreshIntervalMs: 30000,
+  // Barcode Library item ID -- used to look up each water SKU's per-unit volume
+  // (its `volume` + `Volume_type` fields, matched on barcode = item_sku) so water
+  // quantities can show an approximate gallons line. Leave "" to turn that off.
+  barcodeLibraryItemId: "426fb0b37352474cbb6c38d5335e275b",
+  transactionFetchLimit: 1000, // most recent transactions pulled for the per-scope detail view
+  transactionLogLimit: 30,
+  lowStockThreshold: 5,
+  localStorageKey: "linc_display_credential_v1",
+};
+
+// ===========================================================================
+// PKCE helpers (RFC 7636) -- no external auth library; just Web Crypto +
+// fetch, so this file has zero dependencies and nothing that can go stale
+// or become unavailable from a CDN.
+// ===========================================================================
+function base64UrlEncode(bytes) {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function generateCodeVerifier() {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return base64UrlEncode(bytes);
+}
+
+async function generateCodeChallenge(verifier) {
+  const encoder = new TextEncoder();
+  const digest = await crypto.subtle.digest("SHA-256", encoder.encode(verifier));
+  return base64UrlEncode(new Uint8Array(digest));
+}
+
+// ===========================================================================
+// Auth: OAuth2 Authorization Code + PKCE, with the resulting credential
+// persisted to localStorage so a page reload (or the kiosk rebooting)
+// doesn't require a human to sign in again -- only a genuinely expired
+// refresh token does.
+// ===========================================================================
+const Auth = {
+  credential: null, // { accessToken, refreshToken, expiresAt (epoch ms), username }
+  renewTimer: null,
+
+  loadStored() {
+    try {
+      const raw = localStorage.getItem(CONFIG.localStorageKey);
+      if (!raw) return null;
+      return JSON.parse(raw);
+    } catch (e) {
+      console.warn("DIAG: failed to parse stored credential", e);
+      return null;
+    }
+  },
+
+  save(cred) {
+    this.credential = cred;
+    localStorage.setItem(CONFIG.localStorageKey, JSON.stringify(cred));
+  },
+
+  clear() {
+    this.credential = null;
+    localStorage.removeItem(CONFIG.localStorageKey);
+  },
+
+  async beginLogin() {
+    const verifier = generateCodeVerifier();
+    const challenge = await generateCodeChallenge(verifier);
+    sessionStorage.setItem("linc_pkce_verifier", verifier);
+    const params = new URLSearchParams({
+      client_id: CONFIG.clientId,
+      response_type: "code",
+      redirect_uri: CONFIG.redirectUri,
+      code_challenge: challenge,
+      code_challenge_method: "S256",
+      expiration: String(CONFIG.refreshTokenExpirationMinutes),
+    });
+    window.location.href = `${CONFIG.portal}/oauth2/authorize?${params.toString()}`;
+  },
+
+  /** If the current URL is an OAuth redirect callback (?code=...), exchange
+   *  it for tokens and clean the URL. Returns true if it handled a callback. */
+  async handleRedirectCallback() {
+    const url = new URL(window.location.href);
+    const code = url.searchParams.get("code");
+    if (!code) return false;
+
+    const verifier = sessionStorage.getItem("linc_pkce_verifier");
+    sessionStorage.removeItem("linc_pkce_verifier");
+    if (!verifier) {
+      console.warn("DIAG: got an auth code but no stored PKCE verifier -- restarting login");
+      return false;
+    }
+
+    const body = new URLSearchParams({
+      client_id: CONFIG.clientId,
+      grant_type: "authorization_code",
+      redirect_uri: CONFIG.redirectUri,
+      code: code,
+      code_verifier: verifier,
+    });
+    const resp = await fetch(`${CONFIG.portal}/oauth2/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body.toString(),
+    });
+    const data = await resp.json();
+    if (data.error) throw new Error(`OAuth token exchange failed: ${JSON.stringify(data)}`);
+
+    this.save({
+      accessToken: data.access_token,
+      refreshToken: data.refresh_token,
+      expiresAt: Date.now() + data.expires_in * 1000,
+      username: data.username || null,
+    });
+
+    // Strip ?code=... (and ?state= if present) from the address bar so a
+    // reload doesn't try to redeem the same code twice.
+    url.searchParams.delete("code");
+    url.searchParams.delete("state");
+    history.replaceState({}, "", url.toString());
+    return true;
+  },
+
+  async refreshAccessToken() {
+    if (!this.credential || !this.credential.refreshToken) {
+      throw new Error("no refresh token available");
+    }
+    const body = new URLSearchParams({
+      client_id: CONFIG.clientId,
+      grant_type: "refresh_token",
+      refresh_token: this.credential.refreshToken,
+    });
+    const resp = await fetch(`${CONFIG.portal}/oauth2/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body.toString(),
+    });
+    const data = await resp.json();
+    if (data.error) throw new Error(`OAuth refresh failed: ${JSON.stringify(data)}`);
+
+    this.save({
+      accessToken: data.access_token,
+      // Esri doesn't always reissue a refresh_token on refresh; keep the
+      // existing one unless a new one came back.
+      refreshToken: data.refresh_token || this.credential.refreshToken,
+      expiresAt: Date.now() + data.expires_in * 1000,
+      username: data.username || this.credential.username,
+    });
+  },
+
+  /** Ensure `this.credential.accessToken` is valid, refreshing first if
+   *  it's within the renewal margin of expiring. */
+  async ensureFreshToken() {
+    if (!this.credential) throw new Error("not signed in");
+    const msRemaining = this.credential.expiresAt - Date.now();
+    if (msRemaining < CONFIG.accessTokenRenewMarginSeconds * 1000) {
+      await this.refreshAccessToken();
+    }
+    return this.credential.accessToken;
+  },
+
+  scheduleProactiveRenewal() {
+    if (this.renewTimer) clearTimeout(this.renewTimer);
+    const msUntilRenew = Math.max(
+      10000,
+      this.credential.expiresAt - Date.now() - CONFIG.accessTokenRenewMarginSeconds * 1000
+    );
+    this.renewTimer = setTimeout(async () => {
+      try {
+        await this.refreshAccessToken();
+      } catch (e) {
+        console.warn("DIAG: proactive token renewal failed", e);
+        setStatus("down", "Session expired -- sign-in needed");
+        showSignIn("Your session could not be renewed automatically. Please sign in again.");
+        return;
+      }
+      this.scheduleProactiveRenewal();
+    }, msUntilRenew);
+  },
+};
+
+// ===========================================================================
+// ArcGIS REST helpers
+// ===========================================================================
+const layerUrlCache = {};
+
+async function resolveLayerUrl(itemId) {
+  if (layerUrlCache[itemId]) return layerUrlCache[itemId];
+  const token = await Auth.ensureFreshToken();
+
+  const itemResp = await fetch(`${CONFIG.portal}/content/items/${itemId}?f=json&token=${token}`);
+  const item = await itemResp.json();
+  if (!item.url) throw new Error(`No service URL for item ${itemId}: ${JSON.stringify(item)}`);
+
+  const svcResp = await fetch(`${item.url}?f=json&token=${token}`);
+  const svc = await svcResp.json();
+  // Survey123-published tables with no geometry publish under `tables`;
+  // ones with a location question publish under `layers`. Try both, same
+  // fallback the Lambda functions use.
+  const entry = (svc.tables && svc.tables[0]) || (svc.layers && svc.layers[0]);
+  const layerUrl = entry ? `${item.url}/${entry.id}` : `${item.url}/0`;
+
+  layerUrlCache[itemId] = layerUrl;
+  return layerUrl;
+}
+
+async function queryLayer(layerUrl, { where = "1=1", outFields = "*", orderByFields, resultRecordCount } = {}) {
+  const token = await Auth.ensureFreshToken();
+  const params = new URLSearchParams({ where, outFields, f: "json", token, returnGeometry: "false" });
+  if (orderByFields) params.set("orderByFields", orderByFields);
+  if (resultRecordCount) params.set("resultRecordCount", String(resultRecordCount));
+  const resp = await fetch(`${layerUrl}/query?${params.toString()}`);
+  const data = await resp.json();
+  if (data.error) throw new Error(`Query failed: ${JSON.stringify(data.error)}`);
+  return (data.features || []).map((f) => f.attributes);
+}
+
+// ===========================================================================
+// Rendering
+// ===========================================================================
+function esc(s) {
+  return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function formatEpochMs(ms) {
+  if (!ms) return "";
+  const d = new Date(ms);
+  return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+/** Zone/Row/Bay/Level/Position as a list of [label, value] pairs for one
+ *  side (prefix "from_"/"to_") of a Transactions row. Zone and Position are
+ *  the two segments that are legitimately blank (e.g. an 8-digit code with
+ *  no zone) -- those are simply left out rather than shown with an empty
+ *  value, matching the reconcile confirm page's convention. */
+function locationSegments(attrs, prefix) {
+  const segs = [];
+  const zone = attrs[`${prefix}zone`];
+  if (zone !== undefined && zone !== null && zone !== "") segs.push(["Zone", zone]);
+  segs.push(["Row", attrs[`${prefix}row`]]);
+  segs.push(["Bay", attrs[`${prefix}bay`]]);
+  segs.push(["Level", attrs[`${prefix}level`]]);
+  const position = attrs[`${prefix}position`];
+  if (position !== undefined && position !== null && position !== "") segs.push(["Position", position]);
+  return segs;
+}
+
+function locationSegmentsHtml(attrs, prefix) {
+  return locationSegments(attrs, prefix)
+    .map(([label, value]) => `<span class="loc-seg"><span class="loc-label">${esc(label)}</span><span class="loc-val">${esc(value)}</span></span>`)
+    .join("");
+}
+
+// ===========================================================================
+// Location lookup: search or scan a location code and get a summary rolled
+// up by the next segment down (scan a zone -> totals per row; a row -> per
+// bay; ... down to a full location, which lists its items and lots).
+//
+// Location codes are fixed-width, 2 characters per segment, with the zone
+// segment omitted entirely when there isn't one (same scheme the Transactions
+// form decodes with substr()). Matching is a prefix match on the code rebuilt
+// from each balance row's zone/aisle/bay/level/position, not on location_scan
+// (which can be blank on older rows). A short code like "22" therefore matches
+// both zone 22 and row 22 (when there's no zone) -- the data decides.
+// ===========================================================================
+const Lookup = { balances: [], txns: [], volumes: {}, sizes: {}, item: null, query: "", site: "", tab: "stock", loaded: false };
+
+// ---- Water: approximate gallons ------------------------------------------
+// gallons-per-unit comes from the Barcode Library (per-item `volume` in
+// `Volume_type`), assuming quantity counts those barcoded items.
+function ciGet(row, name) {
+  for (const k of Object.keys(row)) if (k.toLowerCase() === name) return row[k];
+  return undefined;
+}
+
+function gallonsPerUnit(volume, type) {
+  const v = Number(volume);
+  if (!(v > 0)) return 0;
+  const t = String(type ?? "").toLowerCase();
+  let f = 0;
+  if (/gal/.test(t)) f = 1;
+  else if (/\bml\b|milli/.test(t)) f = 0.000264172;
+  else if (/\bl\b|lit(er|re)/.test(t)) f = 0.264172;
+  else if (/quart|\bqt/.test(t)) f = 0.25;
+  else if (/pint|\bpt/.test(t)) f = 0.125;
+  else if (/oz|ounce/.test(t)) f = 1 / 128;
+  return v * f;
+}
+
+function isWater(name) {
+  return /\bwater\b/i.test(String(name ?? ""));
+}
+
+function gallonsFor(sku, name, qty) {
+  if (!isWater(name)) return 0;
+  const per = Lookup.volumes[String(sku ?? "")];
+  return per > 0 ? per * (Number(qty) || 0) : 0;
+}
+
+function fmtGallons(g) {
+  return g >= 100 ? Math.round(g).toLocaleString("en-US") : (Math.round(g * 10) / 10).toLocaleString("en-US");
+}
+
+function gallonsHtml(sku, name, qty) {
+  const g = gallonsFor(sku, name, qty);
+  return g > 0 ? `<span class="unit gal">&asymp; ${fmtGallons(g)} gal</span>` : "";
+}
+
+/** Unit label for a balance/transaction row: unit_of_measure, else packing_unit. */
+function unitOf(r) {
+  return String((r.unit_of_measure || r.packing_unit) ?? "").trim() || sizeLabel(r.item_sku);
+}
+
+/** Per-item size from the Barcode Library (e.g. "16.9 oz each") -- used as the
+ *  quantity's unit line when no unit_of_measure was recorded. */
+function sizeLabel(sku) {
+  const z = Lookup.sizes[String(sku ?? "")];
+  return z ? `${fmtNum(z.volume)} ${z.type} each` : "";
+}
+
+function unitHtml(u) {
+  const t = String(u ?? "").trim();
+  return t ? `<span class="unit">${esc(t)}</span>` : "";
+}
+
+function fmtNum(v) {
+  if (v === undefined || v === null || v === "") return "";
+  const n = Number(v);
+  return Number.isFinite(n) ? n.toLocaleString("en-US") : String(v);
+}
+
+function escAttr(s) {
+  return esc(s).replace(/"/g, "&quot;");
+}
+
+function pad2(v) {
+  const s = String(v ?? "").trim();
+  return /^\d$/.test(s) ? "0" + s : s;
+}
+
+function normalizeQuery(raw) {
+  return String(raw ?? "").replace(/[\s-]/g, "").toLowerCase();
+}
+
+function naturalCompare(a, b) {
+  return String(a).localeCompare(String(b), undefined, { numeric: true });
+}
+
+/** Ordered location segments for an Inventory Balance row. Zone and Position
+ *  are left out when blank. Note the balance layer's "Row" field is `aisle`. */
+function rowSegments(r) {
+  const segs = [];
+  const zone = String(r.zone ?? "").trim();
+  const position = String(r.position ?? "").trim();
+  if (zone) segs.push({ label: "Zone", value: pad2(zone) });
+  segs.push({ label: "Row", value: pad2(r.aisle) });
+  segs.push({ label: "Bay", value: pad2(r.bay) });
+  segs.push({ label: "Level", value: pad2(r.level) });
+  if (position) segs.push({ label: "Position", value: pad2(position) });
+  return segs;
+}
+
+function segsHtml(segs) {
+  return segs
+    .map((s) => `<span class="loc-seg"><span class="loc-label">${esc(s.label)}</span><span class="loc-val">${esc(s.value)}</span></span>`)
+    .join("");
+}
+
+/** Pure function: rows + query -> summary structure (no DOM). */
+function summarizeLookup(rows, rawQuery) {
+  const q = normalizeQuery(rawQuery);
+  const items = {};
+  const groups = {};      // next-segment label -> value -> aggregate
+  const leafByCode = {};  // fully specified locations -> their rows
+  const locations = new Set();
+  let totalQty = 0;
+  let matchedCount = 0;
+  let sampleSegs = null;
+  const matchedRows = [];
+
+  for (const r of rows) {
+    const segs = rowSegments(r);
+    const code = segs.map((s) => s.value).join("");
+    if (!code.toLowerCase().startsWith(q)) continue;
+    matchedCount++;
+    matchedRows.push({ r, segs, code });
+    if (!sampleSegs) sampleSegs = segs;
+
+    const qty = Number(r.quantity_on_hand) || 0;
+    const sku = r.item_sku || "(unknown)";
+    locations.add(code);
+    totalQty += qty;
+    const it = items[sku] || (items[sku] = { sku, name: r.item || sku, qty: 0, locs: new Set(), unit: "" });
+    if (!it.unit) it.unit = unitOf(r);
+    it.qty += qty;
+    it.locs.add(code);
+
+    // How many whole segments does the query already cover for this row?
+    let end = 0;
+    let covered = 0;
+    for (const s of segs) {
+      end += s.value.length;
+      if (end <= q.length) covered++;
+      else break;
+    }
+    if (covered >= segs.length) {
+      const leaf = leafByCode[code] || (leafByCode[code] = { code, segs, rows: [] });
+      leaf.rows.push(r);
+    } else {
+      const next = segs[covered];
+      const nextEnd = segs.slice(0, covered + 1).reduce((n, s) => n + s.value.length, 0);
+      const g = groups[next.label] || (groups[next.label] = {});
+      const e = g[next.value] || (g[next.value] = {
+        value: next.value, drill: code.slice(0, nextEnd), locs: new Set(), skus: new Set(), qty: 0,
+      });
+      e.locs.add(code);
+      e.skus.add(sku);
+      e.qty += qty;
+    }
+  }
+
+  // Breadcrumbs for the segments the query already pins down.
+  const crumbs = [];
+  if (sampleSegs) {
+    let end = 0;
+    for (const s of sampleSegs) {
+      end += s.value.length;
+      if (end > q.length) break;
+      crumbs.push({ label: s.label, value: s.value, prefix: q.slice(0, end) });
+    }
+  }
+
+  // No location matched: fall back to an item/lot text search so typing
+  // "water" still finds something.
+  let itemMatches = [];
+  if (matchedCount === 0 && q !== "") {
+    const text = String(rawQuery ?? "").trim().toLowerCase();
+    const bySku = {};
+    for (const r of rows) {
+      const hay = `${r.item || ""} ${r.item_sku || ""} ${r.lot_number || ""}`.toLowerCase();
+      if (!text || !hay.includes(text)) continue;
+      const segs = rowSegments(r);
+      const sku = r.item_sku || "(unknown)";
+      const m = bySku[sku] || (bySku[sku] = { sku, name: r.item || sku, qty: 0, locs: [], unit: unitOf(r) });
+      const qty = Number(r.quantity_on_hand) || 0;
+      m.qty += qty;
+      m.locs.push({ code: segs.map((s) => s.value).join(""), label: segs.map((s) => s.value).join("-"), qty });
+    }
+    itemMatches = Object.values(bySku).sort((a, b) => naturalCompare(a.name, b.name));
+  }
+
+  return {
+    q, rawQuery, matchedCount, matchedRows, locationCount: locations.size, totalQty,
+    itemCount: Object.keys(items).length, groups, crumbs, itemMatches,
+    leaves: Object.values(leafByCode).sort((a, b) => naturalCompare(a.code, b.code)),
+    items: Object.values(items).sort((a, b) => naturalCompare(a.name, b.name)),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Transactions touching a scope. A transaction is "in scope" if its from-code
+// (Move/Ship) or to-code (Move/Receive) starts with the query -- so at any
+// level (whole warehouse, a zone, a row ... a single position) you get the
+// full detail of what moved in or out of it.
+// ---------------------------------------------------------------------------
+function txnCode(t, prefix) {
+  const parts = [];
+  const zone = String(t[`${prefix}zone`] ?? "").trim();
+  if (zone) parts.push(pad2(zone));
+  for (const f of ["row", "bay", "level", "position"]) {
+    const v = String(t[`${prefix}${f}`] ?? "").trim();
+    if (v) parts.push(pad2(v));
+  }
+  return parts.join("");
+}
+
+function scopedTransactions(txns, rawQuery) {
+  const q = normalizeQuery(rawQuery);
+  const out = [];
+  for (const t of txns) {
+    const type = t.transaction_type;
+    const fromCode = type === "Receive" ? "" : txnCode(t, "from_");
+    const toCode = type === "Ship" ? "" : txnCode(t, "to_");
+    const fromIn = fromCode !== "" && fromCode.toLowerCase().startsWith(q);
+    const toIn = toCode !== "" && toCode.toLowerCase().startsWith(q);
+    if (!fromIn && !toIn) continue;
+    // Effect on the scope itself: stock arriving, leaving, or just shuffled inside it.
+    const effect = fromIn && toIn ? "within" : toIn ? "in" : "out";
+    out.push({ t, fromCode, toCode, effect });
+  }
+  return out;
+}
+
+function renderTxnView(crumbs) {
+  const scoped = scopedTransactions(txnPool(), Lookup.query);
+  let qtyIn = 0, qtyOut = 0, within = 0;
+  for (const x of scoped) {
+    const n = Number(x.t.quantity) || 0;
+    if (x.effect === "in") qtyIn += n; else if (x.effect === "out") qtyOut += n; else within += n;
+  }
+  const SHOW = 200;
+  const list = scoped.slice(0, SHOW).map((x) => {
+    const t = x.t;
+    const type = esc(t.transaction_type || "");
+    const sign = x.effect === "in" ? "+" : x.effect === "out" ? "&minus;" : "&harr;";
+    const block = (dir, prefix, code) =>
+      `<div class="loc-block" data-q="${escAttr(code)}" style="cursor:pointer"><span class="loc-dir">${dir}</span>${locationSegmentsHtml(t, prefix)}</div>`;
+    let loc = "";
+    if (type === "Receive") loc = block("To", "to_", x.toCode);
+    else if (type === "Ship") loc = block("From", "from_", x.fromCode);
+    else loc = block("From", "from_", x.fromCode) + `<span class="loc-arrow">&rarr;</span>` + block("To", "to_", x.toCode);
+    const meta = [esc(t.performed_by || ""), formatEpochMs(t.transaction_datetime), t.lot ? `Lot ${esc(t.lot)}` : ""]
+      .filter(Boolean).join(" &middot; ");
+    return `<div class="txn-row">
+      <span class="txn-type ${type}">${type}</span>
+      <span class="txn-item">${esc(t.item || t.item_sku || "")}</span>
+      <div class="txn-qtywrap"><span class="txn-qty ${x.effect}">${sign}${fmtNum(t.quantity)}</span>${unitHtml(unitOf(t))}${gallonsHtml(t.item_sku, t.item, t.quantity)}</div>
+      <div class="loc-line">${loc}</div>
+      <span class="txn-meta">${meta}</span>
+    </div>`;
+  }).join("");
+
+  if (!scoped.length) {
+    return crumbs + `<div class="empty">No transactions touch this location${Lookup.txns.length >= CONFIG.transactionFetchLimit ? " in the most recent " + CONFIG.transactionFetchLimit : ""}.</div>`;
+  }
+  return crumbs + `<div class="lk-card"><div class="lk-stats">
+      <div class="lk-stat"><div class="n">${fmtNum(scoped.length)}</div><div class="l">Transactions</div></div>
+      <div class="lk-stat"><div class="n">+${fmtNum(qtyIn)}</div><div class="l">Qty in</div></div>
+      <div class="lk-stat"><div class="n">&minus;${fmtNum(qtyOut)}</div><div class="l">Qty out</div></div>
+      <div class="lk-stat"><div class="n">${fmtNum(within)}</div><div class="l">Moved within</div></div>
+    </div></div>
+    <div class="lk-card"><h3>Newest first${scoped.length > SHOW ? ` (showing ${SHOW} of ${scoped.length})` : ""}</h3>${list}</div>`;
+}
+
+function renderLookupResult(res) {
+  const el = document.getElementById("lk-results");
+  if (!Lookup.loaded) {
+    el.innerHTML = "<div class='empty'>Loading inventory&hellip;</div>";
+    return;
+  }
+
+  const crumbs =
+    `<div class="crumbs"><button class="crumb root" data-q="">Warehouse</button>` +
+    res.crumbs.map((c) => `<button class="crumb" data-q="${escAttr(c.prefix)}">${esc(c.label)} ${esc(c.value)}</button>`).join("") +
+    `</div>` +
+    (Lookup.item ? `<div class="crumbs"><button class="crumb sel" data-clear-item="1">Item: ${esc(Lookup.item.name)} &times;</button></div>` : "") +
+    `<div class="crumbs lk-tabs">
+      <button class="crumb ${Lookup.tab === "stock" ? "sel" : ""}" data-tab="stock">Stock</button>
+      <button class="crumb ${Lookup.tab === "txns" ? "sel" : ""}" data-tab="txns">Transactions (${scopedTransactions(txnPool(), Lookup.query).length})</button>
+    </div>`;
+
+  if (Lookup.tab === "txns") {
+    el.innerHTML = renderTxnView(crumbs);
+    return;
+  }
+
+  if (res.matchedCount === 0) {
+    if (res.q === "") {
+      el.innerHTML = crumbs + "<div class='empty'>No inventory recorded yet.</div>";
+    } else if (res.itemMatches.length) {
+      const rows = res.itemMatches
+        .map((m) => `<tr>
+          <td>${esc(m.name)}</td>
+          <td class="num">${fmtNum(m.qty)}${unitHtml(m.unit)}${gallonsHtml(m.sku, m.name, m.qty)}</td>
+          <td>${m.locs.map((l) => `<button class="crumb" data-q="${escAttr(l.code)}">${esc(l.label)}</button>`).join(" ")}</td>
+        </tr>`)
+        .join("");
+      el.innerHTML = crumbs + `<div class="lk-card"><h3>No location starts with &ldquo;${esc(res.rawQuery)}&rdquo; &mdash; items matching</h3>
+        <table><thead><tr><th>Item</th><th class="num">Qty</th><th>Where</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+    } else {
+      el.innerHTML = crumbs + `<div class='empty'>Nothing found for &ldquo;${esc(res.rawQuery)}&rdquo;.</div>`;
+    }
+    return;
+  }
+
+  let html = crumbs;
+  html += `<div class="lk-card"><div class="lk-stats">
+    <div class="lk-stat"><div class="n">${fmtNum(res.locationCount)}</div><div class="l">Locations</div></div>
+    <div class="lk-stat"><div class="n">${res.itemCount}</div><div class="l">Item types</div></div>
+    <div class="lk-stat"><div class="n">${fmtNum(res.totalQty)}</div><div class="l">Total on hand</div></div>${
+      (() => { const g = res.items.reduce((n, it) => n + gallonsFor(it.sku, it.name, it.qty), 0);
+        return g > 0 ? `<div class="lk-stat"><div class="n">&asymp; ${fmtGallons(g)}</div><div class="l">Gallons of water</div></div>` : ""; })()
+    }
+  </div></div>`;
+
+  if (Lookup.item) {
+    const locRows = res.matchedRows
+      .slice().sort((a, b) => naturalCompare(a.code, b.code))
+      .map(({ r, segs, code }) => {
+        const qty = Number(r.quantity_on_hand) || 0;
+        const qtyClass = qty === 0 ? "qty-zero" : qty <= CONFIG.lowStockThreshold ? "qty-low" : "";
+        return `<tr class="drill" data-q="${escAttr(code)}" role="button" tabindex="0">
+          <td><span class="drill-btn"><span>${esc(segs.map((s) => s.value).join("-"))}</span><span class="chev">&rsaquo;</span></span></td>
+          <td>${esc(r.lot_number ?? "")}</td>
+          <td class="num ${qtyClass}">${fmtNum(qty)}${unitHtml(unitOf(r))}${gallonsHtml(r.item_sku, r.item, qty)}</td>
+        </tr>`;
+      }).join("");
+    html += `<div class="lk-card"><h3>Where to find ${esc(Lookup.item.name)}</h3>
+      <table><thead><tr><th>Location</th><th>Lot</th><th class="num">On hand</th></tr></thead>
+      <tbody>${locRows}</tbody></table></div>`;
+    el.innerHTML = html;
+    return;
+  }
+
+  for (const label of Object.keys(res.groups)) {
+    const entries = Object.values(res.groups[label]).sort((a, b) => naturalCompare(a.value, b.value));
+    const rows = entries
+      .map((e) => `<tr class="drill" data-q="${escAttr(e.drill)}" role="button" tabindex="0">
+        <td><span class="drill-btn"><span>${esc(label)} ${esc(e.value)}</span><span class="chev">&rsaquo;</span></span></td>
+        <td class="num">${fmtNum(e.locs.size)}</td><td class="num">${fmtNum(e.skus.size)}</td><td class="num">${fmtNum(e.qty)}</td>
+      </tr>`)
+      .join("");
+    html += `<div class="lk-card"><h3>By ${esc(label)}</h3>
+      <table><thead><tr><th>${esc(label)}</th><th class="num">Locations</th><th class="num">Items</th><th class="num">Qty</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`;
+  }
+
+  for (const leaf of res.leaves) {
+    const rows = leaf.rows
+      .map((r) => {
+        const qty = Number(r.quantity_on_hand) || 0;
+        const qtyClass = qty === 0 ? "qty-zero" : qty <= CONFIG.lowStockThreshold ? "qty-low" : "";
+        return `<tr>
+          <td>${esc(r.item || r.item_sku || "")}</td>
+          <td>${esc(r.lot_number ?? "")}</td>
+          <td class="num ${qtyClass}">${fmtNum(qty)}${unitHtml(unitOf(r))}${gallonsHtml(r.item_sku, r.item, qty)}</td>
+          <td class="num">${fmtNum(r.quantity_available)}${unitHtml(unitOf(r))}${gallonsHtml(r.item_sku, r.item, r.quantity_available)}</td>
+        </tr>`;
+      })
+      .join("");
+    html += `<div class="lk-card"><div class="lk-loc">${segsHtml(leaf.segs)}</div>
+      <table><thead><tr><th>Item</th><th>Lot</th><th class="num">On hand</th><th class="num">Available</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`;
+  }
+
+  const singleLeafOnly = res.leaves.length === 1 && Object.keys(res.groups).length === 0;
+  if (!singleLeafOnly) {
+    const rows = res.items
+      .map((it) => `<tr class="drill" data-item="${escAttr(it.sku)}" data-name="${escAttr(it.name)}" role="button" tabindex="0"><td><span class="drill-btn"><span>${esc(it.name)}${it.name !== it.sku ? `<small class="skuline">${esc(it.sku)}</small>` : ""}</span><span class="chev">&rsaquo;</span></span></td><td class="num">${fmtNum(it.locs.size)}</td><td class="num">${fmtNum(it.qty)}${unitHtml(it.unit)}${gallonsHtml(it.sku, it.name, it.qty)}</td></tr>`)
+      .join("");
+    html += `<div class="lk-card"><h3>Items in this scope</h3>
+      <table><thead><tr><th>Item</th><th class="num">Locations</th><th class="num">Qty</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`;
+  }
+  el.innerHTML = html;
+}
+
+const skuOf = (r) => r.item_sku || "(unknown)";
+
+function filteredBalances() {
+  let rows = Lookup.site ? Lookup.balances.filter((r) => (r.site || "") === Lookup.site) : Lookup.balances;
+  if (Lookup.item) rows = rows.filter((r) => skuOf(r) === Lookup.item.sku);
+  return rows;
+}
+
+function txnPool() {
+  let rows = Lookup.site ? Lookup.txns.filter((t) => (t.site || "") === Lookup.site) : Lookup.txns;
+  if (Lookup.item) rows = rows.filter((t) => (t.item_sku || "(unknown)") === Lookup.item.sku);
+  return rows;
+}
+
+function populateSiteSelect() {
+  const sel = document.getElementById("lk-site");
+  const sites = [...new Set(Lookup.balances.map((r) => r.site || "").filter(Boolean))].sort(naturalCompare);
+  if (sites.length <= 1) {
+    sel.classList.add("hidden");
+    Lookup.site = "";
+    return;
+  }
+  sel.innerHTML = `<option value="">All sites</option>` +
+    sites.map((s) => `<option value="${escAttr(s)}">${esc(s)}</option>`).join("");
+  sel.value = Lookup.site;
+  sel.classList.remove("hidden");
+}
+
+function renderLookupFromState() {
+  populateSiteSelect();
+  renderLookupResult(summarizeLookup(filteredBalances(), Lookup.query));
+}
+
+async function loadData() {
+  const [balUrl, txnUrl] = await Promise.all([
+    resolveLayerUrl(CONFIG.balanceItemId),
+    resolveLayerUrl(CONFIG.transactionsItemId),
+  ]);
+  const [balances, txns] = await Promise.all([
+    queryLayer(balUrl),
+    queryLayer(txnUrl, { orderByFields: "transaction_datetime DESC", resultRecordCount: CONFIG.transactionFetchLimit }),
+  ]);
+  Lookup.balances = balances;
+  Lookup.txns = txns;
+  Lookup.loaded = true;
+  await loadVolumes(); // best-effort; never blocks the lookup itself
+}
+
+let volumesLoadedAt = 0;
+async function loadVolumes() {
+  if (!CONFIG.barcodeLibraryItemId) return;
+  if (Date.now() - volumesLoadedAt < 10 * 60 * 1000) return; // library rarely changes
+  try {
+    const url = await resolveLayerUrl(CONFIG.barcodeLibraryItemId);
+    const rows = await queryLayer(url);
+    const map = {};
+    const sizes = {};
+    for (const row of rows) {
+      const barcode = ciGet(row, "barcode");
+      const vol = Number(ciGet(row, "volume"));
+      const type = String(ciGet(row, "volume_type") ?? "").trim().toLowerCase();
+      if (barcode && vol > 0 && type) sizes[String(barcode)] = { volume: vol, type };
+      const per = gallonsPerUnit(vol, type);
+      if (barcode && per > 0) map[String(barcode)] = per;
+    }
+    Lookup.volumes = map;
+    Lookup.sizes = sizes;
+    volumesLoadedAt = Date.now();
+  } catch (e) {
+    console.warn("DIAG: could not load Barcode Library volumes", e);
+  }
+}
+
+async function runLookup(query) {
+  Lookup.query = String(query ?? "");
+  document.getElementById("lk-input").value = Lookup.query;
+  try {
+    await loadData();
+  } catch (e) {
+    console.warn("DIAG: lookup refresh failed, using last loaded data", e);
+    setStatus("stale", `Using cached data (${new Date().toLocaleTimeString()})`);
+  }
+  renderLookupFromState();
+}
+
+// ---------------------------------------------------------------------------
+// Camera barcode scanning. Uses the browser's built-in BarcodeDetector where
+// available (Chrome/Android, recent Safari); otherwise lazy-loads ZXing from a
+// CDN only when someone actually taps Scan. Needs HTTPS (GitHub Pages is).
+// ---------------------------------------------------------------------------
+const ZXING_URL = "https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js";
+
+function loadZxing() {
+  if (typeof ZXing !== "undefined") return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = ZXING_URL;
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error("could not load the scanner library"));
+    document.head.appendChild(s);
+  });
+}
+
+const Scanner = {
+  active: false, stream: null, timer: null, reader: null,
+
+  async start(onText) {
+    const overlay = document.getElementById("scan-overlay");
+    const video = document.getElementById("scan-video");
+    const status = document.getElementById("scan-status");
+    status.textContent = "Point the camera at a location barcode";
+    overlay.classList.remove("hidden");
+    this.active = true;
+    const done = (text) => {
+      if (!this.active) return;
+      this.stop();
+      onText(String(text ?? "").trim());
+    };
+    try {
+      if ("BarcodeDetector" in window) {
+        this.stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: "environment" } }, audio: false,
+        });
+        video.srcObject = this.stream;
+        await video.play();
+        const detector = new BarcodeDetector();
+        this.timer = setInterval(async () => {
+          try {
+            const codes = await detector.detect(video);
+            if (codes.length) done(codes[0].rawValue);
+          } catch (e) { /* frame not ready yet */ }
+        }, 250);
+      } else {
+        await loadZxing();
+        this.reader = new ZXing.BrowserMultiFormatReader();
+        await this.reader.decodeFromVideoDevice(null, video, (result) => {
+          if (result) done(result.getText());
+        });
+      }
+    } catch (e) {
+      console.warn("DIAG: scanner failed", e);
+      status.textContent = `Camera unavailable: ${e && e.message ? e.message : e}`;
+    }
+  },
+
+  stop() {
+    this.active = false;
+    if (this.timer) { clearInterval(this.timer); this.timer = null; }
+    if (this.reader) { try { this.reader.reset(); } catch (e) { /* ignore */ } this.reader = null; }
+    if (this.stream) { this.stream.getTracks().forEach((t) => t.stop()); this.stream = null; }
+    const video = document.getElementById("scan-video");
+    if (video) video.srcObject = null;
+    document.getElementById("scan-overlay").classList.add("hidden");
+  },
+};
+
+function wireLookupUi() {
+  const $ = (id) => document.getElementById(id);
+  $("lk-search").addEventListener("click", () => runLookup($("lk-input").value));
+  $("lk-input").addEventListener("keydown", (e) => { if (e.key === "Enter") runLookup($("lk-input").value); });
+  $("lk-scan").addEventListener("click", () => Scanner.start((text) => runLookup(text)));
+  $("scan-cancel").addEventListener("click", () => Scanner.stop());
+  $("lk-site").addEventListener("change", (e) => { Lookup.site = e.target.value; renderLookupFromState(); });
+  const navigate = (el) => {
+    const tab = el.closest("[data-tab]");
+    if (tab) { Lookup.tab = tab.getAttribute("data-tab"); renderLookupFromState(); return; }
+    if (el.closest("[data-clear-item]")) { Lookup.item = null; renderLookupFromState(); return; }
+    const item = el.closest("[data-item]");
+    if (item) {
+      Lookup.item = { sku: item.getAttribute("data-item"), name: item.getAttribute("data-name") || item.getAttribute("data-item") };
+      Lookup.tab = "stock";
+      renderLookupFromState();
+      return;
+    }
+    const q = el.closest("[data-q]");
+    if (q) runLookup(q.getAttribute("data-q"));
+  };
+  $("lk-results").addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const row = e.target && e.target.closest ? e.target.closest("tr.drill") : null;
+    if (row) { e.preventDefault(); navigate(row); }
+  });
+  $("lk-results").addEventListener("click", (e) => {
+    if (e.target && e.target.closest) navigate(e.target);
+  });
+}
+
+// ===========================================================================
+// Status indicator + sign-in overlay
+// ===========================================================================
+function setStatus(level, text) {
+  document.getElementById("status-dot").className = `dot ${level === "ok" ? "" : level}`;
+  document.getElementById("status-text").textContent = text;
+}
+
+function showSignIn(message) {
+  document.getElementById("app").classList.add("hidden");
+  const overlay = document.getElementById("signin-overlay");
+  if (message) document.getElementById("signin-message").textContent = message;
+  overlay.classList.remove("hidden");
+}
+
+function showApp() {
+  document.getElementById("signin-overlay").classList.add("hidden");
+  document.getElementById("app").classList.remove("hidden");
+}
+
+// ===========================================================================
+// Main polling loop
+// ===========================================================================
+async function refreshData() {
+  try {
+    await loadData();
+    renderLookupFromState();
+    setStatus("ok", `Updated ${new Date().toLocaleTimeString()}`);
+  } catch (e) {
+    console.warn("DIAG: refreshData failed", e);
+    setStatus("stale", `Last update failed at ${new Date().toLocaleTimeString()}`);
+  }
+}
+
+async function init() {
+  document.getElementById("signin-btn").addEventListener("click", () => Auth.beginLogin());
+  wireLookupUi();
+
+  const handledCallback = await Auth.handleRedirectCallback().catch((e) => {
+    console.warn("DIAG: redirect callback handling failed", e);
+    return false;
+  });
+
+  if (!handledCallback) {
+    Auth.credential = Auth.loadStored();
+  }
+
+  if (!Auth.credential) {
+    showSignIn();
+    return;
+  }
+
+  try {
+    await Auth.ensureFreshToken();
+  } catch (e) {
+    console.warn("DIAG: stored session could not be renewed", e);
+    Auth.clear();
+    showSignIn("Your saved session expired. Please sign in again.");
+    return;
+  }
+
+  Auth.scheduleProactiveRenewal();
+  showApp();
+  refreshData();
+  setInterval(refreshData, CONFIG.dataRefreshIntervalMs);
+}
+
+init();
+</script>
 </body>
 </html>
