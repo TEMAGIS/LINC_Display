@@ -229,7 +229,7 @@
   <main id="view-lookup">
     <div class="lk-bar">
       <input id="lk-input" type="search" autocomplete="off" autocapitalize="off" spellcheck="false"
-             enterkeyhint="search" placeholder="Scan or type a location (e.g. 22, 2233, 22331111)">
+             enterkeyhint="search" placeholder="Location (22, 2233) or item (water, barcode)">
       <button id="lk-search" class="lk-btn">Search</button>
       <button id="lk-scan" class="lk-btn secondary">Scan</button>
       <select id="lk-site" class="hidden"></select>
@@ -700,15 +700,23 @@ function summarizeLookup(rows, rawQuery) {
     }
   }
 
-  // No location matched: fall back to an item/lot text search so typing
-  // "water" still finds something.
+  // Item search runs alongside the location search. Every word typed must appear
+  // in the item name / SKU(barcode) / lot. Digits-only queries are mostly location
+  // codes, so they only match an item when they equal its SKU or are long enough
+  // (>= 11 digits) to be a barcode.
   let itemMatches = [];
-  if (matchedCount === 0 && q !== "") {
-    const text = String(rawQuery ?? "").trim().toLowerCase();
+  const text = String(rawQuery ?? "").trim().toLowerCase();
+  const words = text.split(/\s+/).filter(Boolean);
+  const digitsOnly = /^[\d\s-]+$/.test(text);
+  if (words.length) {
     const bySku = {};
     for (const r of rows) {
+      const skuLc = String(r.item_sku || "").toLowerCase();
       const hay = `${r.item || ""} ${r.item_sku || ""} ${r.lot_number || ""}`.toLowerCase();
-      if (!text || !hay.includes(text)) continue;
+      const hit = digitsOnly
+        ? (q === skuLc || (q.length >= 11 && skuLc.includes(q)))
+        : words.every((w) => hay.includes(w));
+      if (!hit) continue;
       const segs = rowSegments(r);
       const sku = r.item_sku || "(unknown)";
       const m = bySku[sku] || (bySku[sku] = { sku, name: r.item || sku, qty: 0, locs: [], unit: unitOf(r) });
@@ -802,6 +810,26 @@ function renderTxnView(crumbs) {
     <div class="lk-card"><h3>Newest first${scoped.length > SHOW ? ` (showing ${SHOW} of ${scoped.length})` : ""}</h3>${list}</div>`;
 }
 
+/** Card listing items whose name/SKU/lot matched the search, with every location
+ *  that holds each one. Tapping an item name shows only that item everywhere. */
+function itemMatchesCard(res, title) {
+  const MAXLOC = 8;
+  const rows = res.itemMatches
+    .map((m) => {
+      const locs = m.locs.slice().sort((a, b) => naturalCompare(a.code, b.code));
+      const more = locs.length - MAXLOC;
+      return `<tr>
+        <td><span class="drill-btn" data-item="${escAttr(m.sku)}" data-name="${escAttr(m.name)}" data-clearq="1" role="button" tabindex="0"><span>${esc(m.name)}${m.name !== m.sku ? `<small class="skuline">${esc(m.sku)}</small>` : ""}</span><span class="chev">&rsaquo;</span></span></td>
+        <td class="num">${fmtNum(m.qty)}${unitHtml(m.unit)}${gallonsHtml(m.sku, m.name, m.qty)}</td>
+        <td>${locs.slice(0, MAXLOC).map((l) => `<button class="crumb" data-q="${escAttr(l.code)}">${esc(l.label)}</button>`).join(" ")}${
+          more > 0 ? ` <button class="crumb" data-item="${escAttr(m.sku)}" data-name="${escAttr(m.name)}" data-clearq="1">+${more} more</button>` : ""}</td>
+      </tr>`;
+    })
+    .join("");
+  return `<div class="lk-card"><h3>${title}</h3>
+    <table><thead><tr><th>Item</th><th class="num">Qty</th><th>Where</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
 function renderLookupResult(res) {
   const el = document.getElementById("lk-results");
   if (!Lookup.loaded) {
@@ -828,15 +856,7 @@ function renderLookupResult(res) {
     if (res.q === "") {
       el.innerHTML = crumbs + "<div class='empty'>No inventory recorded yet.</div>";
     } else if (res.itemMatches.length) {
-      const rows = res.itemMatches
-        .map((m) => `<tr>
-          <td>${esc(m.name)}</td>
-          <td class="num">${fmtNum(m.qty)}${unitHtml(m.unit)}${gallonsHtml(m.sku, m.name, m.qty)}</td>
-          <td>${m.locs.map((l) => `<button class="crumb" data-q="${escAttr(l.code)}">${esc(l.label)}</button>`).join(" ")}</td>
-        </tr>`)
-        .join("");
-      el.innerHTML = crumbs + `<div class="lk-card"><h3>No location starts with &ldquo;${esc(res.rawQuery)}&rdquo; &mdash; items matching</h3>
-        <table><thead><tr><th>Item</th><th class="num">Qty</th><th>Where</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+      el.innerHTML = crumbs + itemMatchesCard(res, `No location starts with &ldquo;${esc(res.rawQuery)}&rdquo; &mdash; items matching`);
     } else {
       el.innerHTML = crumbs + `<div class='empty'>Nothing found for &ldquo;${esc(res.rawQuery)}&rdquo;.</div>`;
     }
@@ -844,6 +864,9 @@ function renderLookupResult(res) {
   }
 
   let html = crumbs;
+  if (!Lookup.item && res.itemMatches.length) {
+    html += itemMatchesCard(res, `Items matching &ldquo;${esc(res.rawQuery)}&rdquo;`);
+  }
   html += `<div class="lk-card"><div class="lk-stats">
     <div class="lk-stat"><div class="n">${fmtNum(res.locationCount)}</div><div class="l">Locations</div></div>
     <div class="lk-stat"><div class="n">${res.itemCount}</div><div class="l">Item types</div></div>
@@ -1086,6 +1109,10 @@ function wireLookupUi() {
     if (item) {
       Lookup.item = { sku: item.getAttribute("data-item"), name: item.getAttribute("data-name") || item.getAttribute("data-item") };
       Lookup.tab = "stock";
+      if (item.hasAttribute("data-clearq")) {      // came from an item search: show the item everywhere
+        Lookup.query = "";
+        $("lk-input").value = "";
+      }
       renderLookupFromState();
       return;
     }
